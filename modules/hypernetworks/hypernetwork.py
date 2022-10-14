@@ -20,27 +20,45 @@ from modules.textual_inversion.learn_schedule import LearnRateScheduler
 class HypernetworkModule(torch.nn.Module):
     multiplier = 1.0
 
-    def __init__(self, dim, state_dict=None):
+    def __init__(self, dim, state_dict=None, multipliers = (1, 2, 1)):
         super().__init__()
-
-        self.linear1 = torch.nn.Linear(dim, dim * 2)
-        self.linear2 = torch.nn.Linear(dim * 2, dim)
-
-        if state_dict is not None:
-            self.load_state_dict(state_dict, strict=True)
+        if state_dict is None or 'multipliers' not in state_dict and multipliers is not None:
+            pass
         else:
-
-            self.linear1.weight.data.normal_(mean=0.0, std=0.01)
-            self.linear1.bias.data.zero_()
-            self.linear2.weight.data.normal_(mean=0.0, std=0.01)
-            self.linear2.bias.data.zero_()
-
+            if multipliers is not None:
+                multipliers = multipliers
+                assert multipliers[0] == 1, "Multiplier Sequence should start with size 1!"
+                assert multipliers[-1] == 1, "Multiplier Sequence should end with size 1!"
+            elif 'multipliers' in state_dict:
+                multipliers = state_dict['multipliers']
+        self.linears = [torch.nn.Linear(int(dim * multipliers[i]), int(dim * multipliers[i+1])) for i in range(len(multipliers) - 1)]
+        self.linear = torch.nn.Sequential(*self.linears)
+        if state_dict is not None:
+            try:
+                self.load_state_dict(state_dict)
+            except RuntimeError:
+                self.try_load_previous(state_dict)
+        else:
+            for layer in self.linears:
+                layer.weight.data.normal_(mean = 0.0, std = 0.01)
+                layer.bias.data.zero_()
         self.to(devices.device)
 
+    def try_load_previous(self, state_dict):
+        states = self.state_dict()
+        states['linear.0.bias'].copy_(state_dict['linear1.bias'])
+        states['linear.0.weight'].copy_(state_dict['linear1.weight'])
+        states['linear.1.bias'].copy_(state_dict['linear2.bias'])
+        states['linear.1.weight'].copy_(state_dict['linear2.weight'])
+
     def forward(self, x):
-        return x + (self.linear2(self.linear1(x))) * self.multiplier
+        return x + self.linear(x) * self.multiplier
 
-
+    def trainables(self):
+        res = []
+        for layer in self.linears:
+            res += [layer.weight, layer.bias]
+        return res
 def apply_strength(value=None):
     HypernetworkModule.multiplier = value if value is not None else shared.opts.sd_hypernetwork_strength
 
@@ -66,8 +84,7 @@ class Hypernetwork:
         for k, layers in self.layers.items():
             for layer in layers:
                 layer.train()
-                res += [layer.linear1.weight, layer.linear1.bias, layer.linear2.weight, layer.linear2.bias]
-
+                res += layer.trainables()
         return res
 
     def save(self, filename):
@@ -210,7 +227,7 @@ def train_hypernetwork(hypernetwork_name, learn_rate, data_root, log_directory, 
     shared.state.textinfo = f"Preparing dataset from {html.escape(data_root)}..."
     with torch.autocast("cuda"):
         ds = modules.textual_inversion.dataset.PersonalizedBase(data_root=data_root, width=512, height=512, repeats=1, placeholder_token=hypernetwork_name, model=shared.sd_model, device=devices.device, template_file=template_file, include_cond=True)
-
+        assert ds.length > 1, "Dataset should contain more than 1 images"
     if unload:
         shared.sd_model.cond_stage_model.to(devices.cpu)
         shared.sd_model.first_stage_model.to(devices.cpu)
