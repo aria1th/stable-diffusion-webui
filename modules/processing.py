@@ -528,7 +528,6 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                 firstphase_height_truncated = int(scale * self.height)
 
             else:
-                self.extra_generation_params["First pass size"] = f"{self.firstphase_width}x{self.firstphase_height}"
 
                 width_ratio = self.width / self.firstphase_width
                 height_ratio = self.height / self.firstphase_height
@@ -540,6 +539,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
                     firstphase_width_truncated = self.firstphase_height * self.width / self.height
                     firstphase_height_truncated = self.firstphase_height
 
+            self.extra_generation_params["First pass size"] = f"{self.firstphase_width}x{self.firstphase_height}"
             self.truncate_x = int(self.firstphase_width - firstphase_width_truncated) // opt_f
             self.truncate_y = int(self.firstphase_height - firstphase_height_truncated) // opt_f
 
@@ -557,11 +557,11 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
 
         samples = samples[:, :, self.truncate_y//2:samples.shape[2]-self.truncate_y//2, self.truncate_x//2:samples.shape[3]-self.truncate_x//2]
 
-        decoded_samples = decode_first_stage(self.sd_model, samples)
+        if opts.use_scale_latent_for_hires_fix:
+            samples = torch.nn.functional.interpolate(samples, size=(self.height // opt_f, self.width // opt_f), mode="bilinear")
 
-        if opts.upscaler_for_img2img is None or opts.upscaler_for_img2img == "None":
-            decoded_samples = torch.nn.functional.interpolate(decoded_samples, size=(self.height, self.width), mode="bilinear")
         else:
+            decoded_samples = decode_first_stage(self.sd_model, samples)
             lowres_samples = torch.clamp((decoded_samples + 1.0) / 2.0, min=0.0, max=1.0)
 
             batch_images = []
@@ -578,7 +578,7 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
             decoded_samples = decoded_samples.to(shared.device)
             decoded_samples = 2. * decoded_samples - 1.
 
-        samples = self.sd_model.get_first_stage_encoding(self.sd_model.encode_first_stage(decoded_samples))
+            samples = self.sd_model.get_first_stage_encoding(self.sd_model.encode_first_stage(decoded_samples))
 
         shared.state.nextjob()
 
