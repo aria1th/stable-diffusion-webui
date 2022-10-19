@@ -13,6 +13,7 @@ from ldm.util import default
 from modules import devices, shared, processing, sd_models
 import torch
 from torch import einsum
+import torch.nn.functional as F
 from einops import rearrange, repeat
 import modules.textual_inversion.dataset
 from modules.textual_inversion import textual_inversion
@@ -58,7 +59,11 @@ class HypernetworkModule(torch.nn.Module):
         states['linear.1.weight'].copy_(state_dict['linear2.weight'])
 
     def forward(self, x):
-        return x + self.linear(x) * self.multiplier
+        y = x
+        for layers in self.linear:
+            y = layers(y)
+            y = F.relu(y)
+        return x + y * self.multiplier
 
     def trainables(self):
         layer_structure = []
