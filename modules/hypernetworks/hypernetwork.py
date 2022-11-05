@@ -25,6 +25,8 @@ from statistics import stdev, mean
 optimizer_dict = {optim_name : cls_obj for optim_name, cls_obj in inspect.getmembers(torch.optim, inspect.isclass) if optim_name != "Optimizer"}
 
 
+optimizer_dict = {optim_name : cls_obj for optim_name, cls_obj in inspect.getmembers(torch.optim, inspect.isclass) if optim_name != "Optimizer"}
+
 class HypernetworkModule(torch.nn.Module):
     multiplier = 1.0
     activation_dict = {
@@ -38,13 +40,15 @@ class HypernetworkModule(torch.nn.Module):
     }
     activation_dict.update({cls_name.lower(): cls_obj for cls_name, cls_obj in inspect.getmembers(torch.nn.modules.activation) if inspect.isclass(cls_obj) and cls_obj.__module__ == 'torch.nn.modules.activation'})
 
-    def __init__(self, dim, state_dict=None, layer_structure=None, activation_func=None, weight_init='Normal', add_layer_norm=False, use_dropout=False):
-        device = None
+    def __init__(self, dim, state_dict=None, layer_structure=None, activation_func=None, weight_init='Normal',
+                 add_layer_norm=False, activate_output=False, dropout_structure=None, device=None):
         super().__init__()
 
         assert layer_structure is not None, "layer_structure must not be None"
         assert layer_structure[0] == 1, "Multiplier Sequence should start with size 1!"
         assert layer_structure[-1] == 1, "Multiplier Sequence should end with size 1!"
+        assert dropout_structure is None or dropout_structure[0] == dropout_structure[-1] == 0, "Dropout Sequence should start and end with probability 0!"
+        assert dropout_structure is None or len(dropout_structure) == len(layer_structure), "Dropout Sequence should match length with layer structure!"
 
         linears = []
         for i in range(len(layer_structure) - 1):
@@ -52,8 +56,8 @@ class HypernetworkModule(torch.nn.Module):
             # Add a fully-connected layer
             linears.append(torch.nn.Linear(int(dim * layer_structure[i]), int(dim * layer_structure[i+1])))
 
-            # Add an activation func
-            if activation_func == "linear" or activation_func is None:
+            # Add an activation func except last layer
+            if activation_func == "linear" or activation_func is None or (i >= len(layer_structure) - 2 and not activate_output):
                 pass
             elif activation_func in self.activation_dict:
                 linears.append(self.activation_dict[activation_func]())
@@ -64,9 +68,12 @@ class HypernetworkModule(torch.nn.Module):
             if add_layer_norm:
                 linears.append(torch.nn.LayerNorm(int(dim * layer_structure[i+1])))
 
-            # Add dropout expect last layer
-            if use_dropout and i < len(layer_structure) - 3:
-                linears.append(torch.nn.Dropout(p=0.3))
+            # Everything should be now parsed into dropout structure, and applied here.
+            # Since we only have dropouts after layers, dropout structure should start with 0 and end with 0.
+            if dropout_structure is not None and (p := dropout_structure[i+1]) > 0:
+                assert 0 < p < 1, "Dropout probability should be 0 or float between 0 and 1!"
+                linears.append(torch.nn.Dropout(p=p))
+            # Code explanation : [1, 2, 1] -> dropout is missing when last_layer_dropout is false. [1, 2, 2, 1] -> [0, 0.3, 0, 0], when its True, [0, 0.3, 0.3, 0].
 
         self.linear = torch.nn.Sequential(*linears)
 
@@ -79,7 +86,7 @@ class HypernetworkModule(torch.nn.Module):
                     w, b = layer.weight.data, layer.bias.data
                     if weight_init == "Normal" or type(layer) == torch.nn.LayerNorm:
                         normal_(w, mean=0.0, std=0.01)
-                        normal_(b, mean=0.0, std=0.005)
+                        normal_(b, mean=0.0, std=0)
                     elif weight_init == 'XavierUniform':
                         xavier_uniform_(w)
                         zeros_(b)
@@ -134,11 +141,26 @@ def apply_strength(value=None):
     HypernetworkModule.multiplier = value if value is not None else shared.opts.sd_hypernetwork_strength
 
 
+def parse_dropout_structure(layer_structure, use_dropout, last_layer_dropout):
+    if layer_structure is None:
+        layer_structure = [1, 2, 1]
+    if not use_dropout:
+        return [0] * len(layer_structure)
+    dropout_values = [0]
+    dropout_values.extend([0.3] * (len(layer_structure) - 3))
+    if last_layer_dropout:
+        dropout_values.append(0.3)
+    else:
+        dropout_values.append(0)
+    dropout_values.append(0)
+    return dropout_values
+
+
 class Hypernetwork:
     filename = None
     name = None
 
-    def __init__(self, name=None, enable_sizes=None, layer_structure=None, activation_func=None, weight_init=None, add_layer_norm=False, use_dropout=False):
+    def __init__(self, name=None, enable_sizes=None, layer_structure=None, activation_func=None, weight_init=None, add_layer_norm=False, use_dropout=False, activate_output=False, **kwargs):
         self.filename = None
         self.name = name
         self.layers = {}
@@ -150,16 +172,24 @@ class Hypernetwork:
         self.weight_init = weight_init
         self.add_layer_norm = add_layer_norm
         self.use_dropout = use_dropout
+        self.activate_output = activate_output
+        self.last_layer_dropout = kwargs['last_layer_dropout'] if 'last_layer_dropout' in kwargs else True
         self.optimizer_name = None
         self.optimizer_state_dict = None
+        self.dropout_structure = kwargs['dropout_structure'] if 'dropout_structure' in kwargs else None
+        if self.dropout_structure is None:
+            self.dropout_structure = parse_dropout_structure(self.layer_structure, self.use_dropout, self.last_layer_dropout)
 
         for size in enable_sizes or []:
             self.layers[size] = (
-                HypernetworkModule(size, None, self.layer_structure, self.activation_func, self.weight_init, self.add_layer_norm, self.use_dropout),
-                HypernetworkModule(size, None, self.layer_structure, self.activation_func, self.weight_init, self.add_layer_norm, self.use_dropout),
+                HypernetworkModule(size, None, self.layer_structure, self.activation_func, self.weight_init,
+                                   self.add_layer_norm, self.activate_output, dropout_structure=self.dropout_structure),
+                HypernetworkModule(size, None, self.layer_structure, self.activation_func, self.weight_init,
+                                   self.add_layer_norm, self.activate_output, dropout_structure=self.dropout_structure),
             )
+        self.eval()
 
-    def weights(self):
+    def weights(self):  # This is only called when trainable weight is required.
         res = []
 
         for k, layers in self.layers.items():
@@ -169,8 +199,14 @@ class Hypernetwork:
 
         return res
 
+    def eval(self):
+        for k, layers in self.layers.items():
+            for layer in layers:
+                layer.eval()
+
     def save(self, filename):
         state_dict = {}
+        optimizer_saved_dict = {}
 
         for k, v in self.layers.items():
             state_dict[k] = (v[0].state_dict(), v[1].state_dict())
@@ -181,15 +217,19 @@ class Hypernetwork:
         state_dict['activation_func'] = self.activation_func
         state_dict['is_layer_norm'] = self.add_layer_norm
         state_dict['weight_initialization'] = self.weight_init
-        state_dict['use_dropout'] = self.use_dropout
         state_dict['sd_checkpoint'] = self.sd_checkpoint
         state_dict['sd_checkpoint_name'] = self.sd_checkpoint_name
+        state_dict['activate_output'] = self.activate_output
+        state_dict['dropout_structure'] = self.dropout_structure
+
         if self.optimizer_name is not None:
-            state_dict['optimizer_name'] = self.optimizer_name
-        if self.optimizer_state_dict:
-            state_dict['optimizer_state_dict'] = self.optimizer_state_dict
+            optimizer_saved_dict['optimizer_name'] = self.optimizer_name
 
         torch.save(state_dict, filename)
+        if shared.opts.save_optimizer_state and self.optimizer_state_dict:
+            optimizer_saved_dict['hash'] = sd_models.model_hash(filename)
+            optimizer_saved_dict['optimizer_state_dict'] = self.optimizer_state_dict
+            torch.save(optimizer_saved_dict, filename + '.optim')
 
     def load(self, filename):
         self.filename = filename
@@ -207,10 +247,23 @@ class Hypernetwork:
         self.add_layer_norm = state_dict.get('is_layer_norm', False)
         print(f"Layer norm is set to {self.add_layer_norm}")
         self.use_dropout = state_dict.get('use_dropout', False)
-        print(f"Dropout usage is set to {self.use_dropout}")
-        self.optimizer_name = state_dict.get('optimizer_name', 'AdamW')
+        print(f"Dropout usage is set to {self.use_dropout}" )
+        self.activate_output = state_dict.get('activate_output', True)
+        print(f"Activate last layer is set to {self.activate_output}")
+        self.last_layer_dropout = state_dict.get('last_layer_dropout', False)  # Silent fix for HNs before 4918eb6
+        # Dropout structure should have same length as layer structure, Every digits should be in [0,1), and last digit must be 0.
+        self.dropout_structure = state_dict.get('dropout_structure', None)
+        if self.dropout_structure is None:
+            self.dropout_structure = parse_dropout_structure(self.layer_structure, self.use_dropout, self.last_layer_dropout)
+        print(f"Dropout structure is set to {self.dropout_structure}")
+
+        optimizer_saved_dict = torch.load(self.filename + '.optim', map_location = 'cpu') if os.path.exists(self.filename + '.optim') else {}
+        self.optimizer_name = optimizer_saved_dict.get('optimizer_name', 'AdamW')
         print(f"Optimizer name is {self.optimizer_name}")
-        self.optimizer_state_dict = state_dict.get('optimizer_state_dict', None)
+        if sd_models.model_hash(filename) == optimizer_saved_dict.get('hash', None):
+            self.optimizer_state_dict = optimizer_saved_dict.get('optimizer_state_dict', None)
+        else:
+            self.optimizer_state_dict = None
         if self.optimizer_state_dict:
             print("Loaded existing optimizer from checkpoint")
         else:
@@ -219,8 +272,10 @@ class Hypernetwork:
         for size, sd in state_dict.items():
             if type(size) == int:
                 self.layers[size] = (
-                    HypernetworkModule(size, sd[0], self.layer_structure, self.activation_func, self.weight_init, self.add_layer_norm, self.use_dropout),
-                    HypernetworkModule(size, sd[1], self.layer_structure, self.activation_func, self.weight_init, self.add_layer_norm, self.use_dropout),
+                    HypernetworkModule(size, sd[0], self.layer_structure, self.activation_func, self.weight_init,
+                                       self.add_layer_norm, self.activate_output, self.dropout_structure),
+                    HypernetworkModule(size, sd[1], self.layer_structure, self.activation_func, self.weight_init,
+                                       self.add_layer_norm, self.activate_output, self.dropout_structure),
                 )
 
         self.name = state_dict.get('name', self.name)
@@ -238,13 +293,16 @@ def list_hypernetworks(path):
     res = {}
     for filename in glob.iglob(os.path.join(path, '**/*.pt'), recursive=True):
         name = os.path.splitext(os.path.basename(filename))[0]
-        res[name] = filename
+        # Prevent a hypothetical "None.pt" from being listed.
+        if name != "None":
+            res[name + f"({sd_models.model_hash(filename)})"] = filename
     return res
 
 
 def load_hypernetwork(filename):
     path = shared.hypernetworks.get(filename, None)
-    if path is not None:
+    # Prevent any file named "None.pt" from being loaded.
+    if path is not None and filename != "None":
         print(f"Loading hypernetwork {filename}")
         try:
             shared.loaded_hypernetwork = Hypernetwork()
@@ -361,7 +419,9 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
     # images allows training previews to have infotext. Importing it at the top causes a circular import problem.
     from modules import images
 
-    assert hypernetwork_name, 'hypernetwork not selected'
+    save_hypernetwork_every = save_hypernetwork_every or 0
+    create_image_every = create_image_every or 0
+    textual_inversion.validate_train_inputs(hypernetwork_name, learn_rate, batch_size, data_root, template_file, steps, save_hypernetwork_every, create_image_every, log_directory, name="hypernetwork")
 
     path = shared.hypernetworks.get(hypernetwork_name, None)
     shared.loaded_hypernetwork = Hypernetwork()
@@ -370,6 +430,7 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
     shared.state.textinfo = "Initializing hypernetwork training..."
     shared.state.job_count = steps
 
+    hypernetwork_name = hypernetwork_name.rsplit('(', 1)[0]
     filename = os.path.join(shared.cmd_opts.hypernetwork_dir, f'{hypernetwork_name}.pt')
 
     log_directory = os.path.join(log_directory, datetime.datetime.now().strftime("%Y-%m-%d"), hypernetwork_name)
@@ -387,17 +448,24 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
     else:
         images_dir = None
 
+    hypernetwork = shared.loaded_hypernetwork
+    checkpoint = sd_models.select_checkpoint()
+
+    ititial_step = hypernetwork.step or 0
+    if ititial_step >= steps:
+        shared.state.textinfo = f"Model has already been trained beyond specified max steps"
+        return hypernetwork, filename
+
+    scheduler = LearnRateScheduler(learn_rate, steps, ititial_step)
+    
+    # dataset loading may take a while, so input validations and early returns should be done before this
     shared.state.textinfo = f"Preparing dataset from {html.escape(data_root)}..."
     with torch.autocast("cuda"):
         ds = modules.textual_inversion.dataset.PersonalizedBase(data_root=data_root, width=training_width, height=training_height, repeats=shared.opts.training_image_repeats_per_epoch, placeholder_token=hypernetwork_name, model=shared.sd_model, device=devices.device, template_file=template_file, include_cond=True, batch_size=batch_size)
+
     if unload:
         shared.sd_model.cond_stage_model.to(devices.cpu)
         shared.sd_model.first_stage_model.to(devices.cpu)
-
-    hypernetwork = shared.loaded_hypernetwork
-    weights = hypernetwork.weights()
-    for weight in weights:
-        weight.requires_grad = True
 
     size = len(ds.indexes)
     loss_dict = defaultdict(lambda : deque(maxlen = 1024))
@@ -405,16 +473,10 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
     previous_mean_losses = [0]
     previous_mean_loss = 0
     print("Mean loss of {} elements".format(size))
-
-    last_saved_file = "<none>"
-    last_saved_image = "<none>"
-    forced_filename = "<none>"
-
-    ititial_step = hypernetwork.step or 0
-    if ititial_step > steps:
-        return hypernetwork, filename
-
-    scheduler = LearnRateScheduler(learn_rate, steps, ititial_step)
+    
+    weights = hypernetwork.weights()
+    for weight in weights:
+        weight.requires_grad = True
     # Here we use optimizer from saved HN, or we can specify as UI option.
     if (optimizer_name := hypernetwork.optimizer_name) in optimizer_dict:
         optimizer = optimizer_dict[hypernetwork.optimizer_name](params=weights, lr=scheduler.learn_rate)
@@ -428,7 +490,12 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
         except RuntimeError as e:
             print("Cannot resume from saved optimizer!")
             print(e)
+
     steps_without_grad = 0
+
+    last_saved_file = "<none>"
+    last_saved_image = "<none>"
+    forced_filename = "<none>"
 
     pbar = tqdm.tqdm(enumerate(ds), total=steps - ititial_step)
     for i, entries in pbar:
@@ -482,14 +549,13 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
 
         if hypernetwork_dir is not None and steps_done % save_hypernetwork_every == 0:
             # Before saving, change name to match current checkpoint.
-            hypernetwork.name = f'{hypernetwork_name}-{steps_done}'
-            last_saved_file = os.path.join(hypernetwork_dir, f'{hypernetwork.name}.pt')
+            hypernetwork_name_every = f'{hypernetwork_name}-{steps_done}'
+            last_saved_file = os.path.join(hypernetwork_dir, f'{hypernetwork_name_every}.pt')
             hypernetwork.optimizer_name = optimizer_name
             if shared.opts.save_optimizer_state:
                 hypernetwork.optimizer_state_dict = optimizer.state_dict()
-            else:
-                hypernetwork.optimizer_state_dict = None
-            hypernetwork.save(last_saved_file)
+            save_hypernetwork(hypernetwork, checkpoint, hypernetwork_name, last_saved_file)
+            hypernetwork.optimizer_state_dict = None  # dereference it after saving, to save memory.
 
         textual_inversion.write_loss(log_directory, "hypernetwork_loss.csv", hypernetwork.step, len(ds), {
             "loss": f"{previous_mean_loss:.7f}",
@@ -550,18 +616,28 @@ Last saved image: {html.escape(last_saved_image)}<br/>
 """
         
     report_statistics(loss_dict)
-    checkpoint = sd_models.select_checkpoint()
 
-    hypernetwork.sd_checkpoint = checkpoint.hash
-    hypernetwork.sd_checkpoint_name = checkpoint.model_name
-    # Before saving for the last time, change name back to the base name (as opposed to the save_hypernetwork_every step-suffixed naming convention).
-    hypernetwork.name = hypernetwork_name
-    filename = os.path.join(shared.cmd_opts.hypernetwork_dir, f'{hypernetwork.name}.pt')
+    filename = os.path.join(shared.cmd_opts.hypernetwork_dir, f'{hypernetwork_name}.pt')
     hypernetwork.optimizer_name = optimizer_name
     if shared.opts.save_optimizer_state:
         hypernetwork.optimizer_state_dict = optimizer.state_dict()
-    else:
-        hypernetwork.optimizer_state_dict = None
-    hypernetwork.save(filename)
-
+    save_hypernetwork(hypernetwork, checkpoint, hypernetwork_name, filename)
+    del optimizer
+    hypernetwork.optimizer_state_dict = None  # dereference it after saving, to save memory.
+    hypernetwork.eval()
     return hypernetwork, filename
+
+def save_hypernetwork(hypernetwork, checkpoint, hypernetwork_name, filename):
+    old_hypernetwork_name = hypernetwork.name
+    old_sd_checkpoint = hypernetwork.sd_checkpoint if hasattr(hypernetwork, "sd_checkpoint") else None
+    old_sd_checkpoint_name = hypernetwork.sd_checkpoint_name if hasattr(hypernetwork, "sd_checkpoint_name") else None
+    try:
+        hypernetwork.sd_checkpoint = checkpoint.hash
+        hypernetwork.sd_checkpoint_name = checkpoint.model_name
+        hypernetwork.name = hypernetwork_name
+        hypernetwork.save(filename)
+    except:
+        hypernetwork.sd_checkpoint = old_sd_checkpoint
+        hypernetwork.sd_checkpoint_name = old_sd_checkpoint_name
+        hypernetwork.name = old_hypernetwork_name
+        raise
