@@ -12,7 +12,8 @@ from skimage import exposure
 from typing import Any, Dict, List, Optional
 
 import modules.sd_hijack
-from modules import devices, prompt_parser, masking, sd_samplers, lowvram, generation_parameters_copypaste
+from modules import devices, prompt_parser, masking, sd_samplers, lowvram, generation_parameters_copypaste, \
+    colored_conditioning
 from modules.sd_hijack import model_hijack
 from modules.shared import opts, cmd_opts, state
 import modules.shared as shared
@@ -119,7 +120,7 @@ class StableDiffusionProcessing():
         self.override_settings = {k: v for k, v in (override_settings or {}).items() if k not in shared.restricted_opts}
         self.reference_image_path = reference_image_path
         self.reference_image_info = reference_image_info
-        self.image_conditioning_info = {} if not self.reference_image_info and not self.reference_image_path else self.parse_image_conditioning(self.reference_image_info, self.reference_image_path)
+        self.image_conditioning_info = {} if not self.reference_image_info and not self.reference_image_path else self.parse_image_conditioning(self.prompt, self.reference_image_info, self.reference_image_path)
 
         if not seed_enable_extras:
             self.subseed = -1
@@ -202,9 +203,8 @@ class StableDiffusionProcessing():
         self.sd_model = None
         self.sampler = None
 
-    def parse_image_conditioning(self, reference_image_info, reference_image_path):
-
-        pass
+    def parse_image_conditioning(self, prompt, reference_image_info, reference_image_path):
+        return colored_conditioning.process_condition(self, prompt, reference_image_info, reference_image_path)
 
 
 class Processed:
@@ -524,7 +524,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 shared.state.job = f"Batch {n+1} out of {p.n_iter}"
 
             with devices.autocast():
-                samples_ddim = p.sample(conditioning=c, unconditional_conditioning=uc, seeds=seeds, subseeds=subseeds, subseed_strength=p.subseed_strength, prompts=prompts, encoder_hidden_state=p.reference_image_info)
+                samples_ddim = p.sample(conditioning=c, unconditional_conditioning=uc, seeds=seeds, subseeds=subseeds, subseed_strength=p.subseed_strength, prompts=prompts, encoder_hidden_state=p.image_conditioning_info)
 
             samples_ddim = samples_ddim.to(devices.dtype_vae)
             x_samples_ddim = decode_first_stage(p.sd_model, samples_ddim)
