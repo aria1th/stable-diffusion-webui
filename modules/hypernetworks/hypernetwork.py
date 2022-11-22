@@ -2,6 +2,7 @@ import csv
 import datetime
 import glob
 import html
+import json
 import os
 import sys
 import traceback
@@ -15,6 +16,7 @@ from ldm.util import default
 from modules import devices, processing, sd_models, shared
 from modules.textual_inversion import textual_inversion
 from modules.textual_inversion.learn_schedule import LearnRateScheduler
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 from torch import einsum
 from torch.nn.init import normal_, xavier_normal_, xavier_uniform_, kaiming_normal_, kaiming_uniform_, zeros_
 
@@ -94,6 +96,7 @@ class HypernetworkModule(torch.nn.Module):
             self.fix_old_state_dict(state_dict)
             self.load_state_dict(state_dict)
         else:
+            #torch.manual_seed(42) # fix seed.
             for layer in self.linear:
                 if type(layer) == torch.nn.Linear or type(layer) == torch.nn.LayerNorm:
                     w, b = layer.weight.data, layer.bias.data
@@ -270,14 +273,16 @@ class Hypernetwork:
         print(f"Dropout structure is set to {self.dropout_structure}")
 
         optimizer_saved_dict = torch.load(self.filename + '.optim', map_location = 'cpu') if os.path.exists(self.filename + '.optim') else {}
-        self.optimizer_name = optimizer_saved_dict.get('optimizer_name', 'AdamW')
-        print(f"Optimizer name is {self.optimizer_name}")
+        self.optimizer_name = "AdamW"
+
         if sd_models.model_hash(filename) == optimizer_saved_dict.get('hash', None):
             self.optimizer_state_dict = optimizer_saved_dict.get('optimizer_state_dict', None)
         else:
             self.optimizer_state_dict = None
         if self.optimizer_state_dict:
+            self.optimizer_name = optimizer_saved_dict.get('optimizer_name', 'AdamW')
             print("Loaded existing optimizer from checkpoint")
+            print(f"Optimizer name is {self.optimizer_name}")
         else:
             print("No saved optimizer exists in checkpoint")
 
@@ -476,7 +481,7 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
         raise RuntimeError("Cannot perform training for Hypernetwork structure pipeline!")
     shared.state.textinfo = "Initializing hypernetwork training..."
     shared.state.job_count = steps
-
+    losses_list = []
     hypernetwork_name = hypernetwork_name.rsplit('(', 1)[0]
     filename = os.path.join(shared.cmd_opts.hypernetwork_dir, f'{hypernetwork_name}.pt')
 
@@ -504,7 +509,6 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
         return hypernetwork, filename
 
     scheduler = LearnRateScheduler(learn_rate, steps, ititial_step)
-    
     # dataset loading may take a while, so input validations and early returns should be done before this
     shared.state.textinfo = f"Preparing dataset from {html.escape(data_root)}..."
     with torch.autocast("cuda"):
@@ -539,6 +543,7 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
             print("Cannot resume from saved optimizer!")
             print(e)
 
+    scheduler_beta = CosineAnnealingWarmRestarts(optimizer = optimizer,T_0 = 4000, T_mult=1, eta_min=1e-7)
     steps_without_grad = 0
 
     last_saved_file = "<none>"
@@ -551,10 +556,10 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
         if len(loss_dict) > 0:
             previous_mean_losses = [i[-1] for i in loss_dict.values()]
             previous_mean_loss = mean(previous_mean_losses)
-            
-        scheduler.apply(optimizer, hypernetwork.step)
-        if scheduler.finished:
-            break
+
+        #scheduler.apply(optimizer, hypernetwork.step)
+        #if scheduler.finished:
+        #    break
 
         if shared.state.interrupted:
             break
@@ -563,11 +568,13 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
             c = stack_conds([entry.cond for entry in entries]).to(devices.device)
             # c = torch.vstack([entry.cond for entry in entries]).to(devices.device)
             x = torch.stack([entry.latent for entry in entries]).to(devices.device)
-            loss = shared.sd_model(x, c)[0]
+            loss_infos = shared.sd_model(x, c)[1]
+            loss = loss_infos['val/loss_simple'] # + loss_infos['val/loss_vlb'] * 0.4 #its 'prior class preserving' loss
             del x
             del c
 
             losses[hypernetwork.step % losses.shape[0]] = loss.item()
+            losses_list.append(loss.item())
             for entry in entries:
                 loss_dict[entry.filename].append(loss.item())
             optimizer.zero_grad()
@@ -580,6 +587,7 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
                 steps_without_grad = 0
             assert steps_without_grad < 10, 'no gradient found for the trained weight after backward() for 10 steps in a row; this is a bug; training cannot continue'
             optimizer.step()
+            scheduler_beta.step(hypernetwork.step)
 
         steps_done = hypernetwork.step + 1
 
@@ -605,7 +613,7 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
 
         textual_inversion.write_loss(log_directory, "hypernetwork_loss.csv", hypernetwork.step, len(ds), {
             "loss": f"{previous_mean_loss:.7f}",
-            "learn_rate": scheduler.learn_rate
+            "learn_rate": scheduler_beta.get_last_lr()
         })
 
         if images_dir is not None and steps_done % create_image_every == 0:
@@ -669,6 +677,8 @@ Last saved image: {html.escape(last_saved_image)}<br/>
     if shared.opts.save_optimizer_state:
         hypernetwork.optimizer_state_dict = optimizer.state_dict()
     save_hypernetwork(hypernetwork, checkpoint, hypernetwork_name, filename)
+    with open(r'F:\stable-diffusion-webui\textual_inversion\loss.json','w') as file:
+        json.dump(losses_list, file)
     del optimizer
     hypernetwork.optimizer_state_dict = None  # dereference it after saving, to save memory.
     hypernetwork.eval()

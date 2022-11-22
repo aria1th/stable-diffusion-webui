@@ -22,6 +22,10 @@ class DatasetEntry:
         self.cond = None
         self.cond_text = None
 
+def get_closest(val):
+    i, j = divmod(val,64)
+    return i*64 + (j!=0) * 64
+
 
 class PersonalizedBase(Dataset):
     def __init__(self, data_root, width, height, repeats, flip_p=0.5, placeholder_token="*", model=None, device=None, template_file=None, include_cond=False, batch_size=1):
@@ -47,11 +51,20 @@ class PersonalizedBase(Dataset):
 
         cond_model = shared.sd_model.cond_stage_model
 
-        self.image_paths = [os.path.join(data_root, file_path) for file_path in os.listdir(data_root)]
+        self.image_paths = [os.path.join(data_root, file_path) for file_path in os.listdir(data_root)] * 2
         print("Preparing dataset...")
         for path in tqdm.tqdm(self.image_paths):
             try:
-                image = Image.open(path).convert('RGB').resize((self.width, self.height), PIL.Image.BICUBIC)
+                #image = Image.open(path).convert('RGB').resize((self.width, self.height), PIL.Image.BICUBIC)
+                # variable size
+                image = Image.open(path).convert('RGB')
+                w, h = image.size
+                r = max(1, w / self.width, h / self.height) # divide by this
+                w, h = int(w/r), int(h/r)
+                w, h = get_closest(w), get_closest(h)
+                image = image.resize((w,h), PIL.Image.LANCZOS)
+
+
             except Exception:
                 continue
 
@@ -90,10 +103,11 @@ class PersonalizedBase(Dataset):
 
         self.dataset_length = len(self.dataset)
         self.indexes = None
+        self.random = np.random.default_rng(42)
         self.shuffle()
 
     def shuffle(self):
-        self.indexes = np.random.permutation(self.dataset_length)
+        self.indexes = self.random.permutation(self.dataset_length)
 
     def create_text(self, filename_text):
         text = random.choice(self.lines)
