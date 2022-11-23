@@ -552,6 +552,7 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
             print(e)
 
     scheduler_beta = CosineAnnealingWarmRestarts(optimizer=optimizer, T_0=beta_repeat_epoch, T_mult=1, eta_min=min_lr)
+
     scheduler_gamma = ExponentialLR(optimizer=optimizer, gamma=gamma_rate)
     steps_without_grad = 0
 
@@ -562,6 +563,9 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
     pbar = tqdm.tqdm(enumerate(ds), total=steps - ititial_step)
     for i, entries in pbar:
         hypernetwork.step = i + ititial_step
+        if use_beta_scheduler:
+            scheduler_beta.step(hypernetwork.step)
+            scheduler_gamma.step(hypernetwork.step)
         if len(loss_dict) > 0:
             previous_mean_losses = [i[-1] for i in loss_dict.values()]
             previous_mean_loss = mean(previous_mean_losses)
@@ -596,9 +600,6 @@ def train_hypernetwork(hypernetwork_name, learn_rate, batch_size, data_root, log
                 steps_without_grad = 0
             assert steps_without_grad < 10, 'no gradient found for the trained weight after backward() for 10 steps in a row; this is a bug; training cannot continue'
             optimizer.step()
-            if use_beta_scheduler:
-                scheduler_beta.step(hypernetwork.step)
-                scheduler_gamma.step(hypernetwork.step)
 
         steps_done = hypernetwork.step + 1
 
