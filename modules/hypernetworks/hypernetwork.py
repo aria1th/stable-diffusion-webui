@@ -689,8 +689,6 @@ Last saved image: {html.escape(last_saved_image)}<br/>
     if shared.opts.save_optimizer_state:
         hypernetwork.optimizer_state_dict = optimizer.state_dict()
     save_hypernetwork(hypernetwork, checkpoint, hypernetwork_name, filename)
-    with open(r'F:\stable-diffusion-webui\textual_inversion\loss.json','w') as file:
-        json.dump(losses_list, file)
     del optimizer
     hypernetwork.optimizer_state_dict = None  # dereference it after saving, to save memory.
     hypernetwork.eval()
