@@ -12,7 +12,7 @@ import modules.shared as shared
 import modules.processing as processing
 from modules.ui import plaintext_to_html
 import modules.scripts
-
+from contextlib import closing
 
 def process_batch(p, input_dir, output_dir, inpaint_mask_dir, args, to_scale=False, scale_by=1.0):
     processing.fix_seed(p)
@@ -142,7 +142,7 @@ def img2img(id_task: str, mode: int, prompt: str, negative_prompt: str, prompt_s
 
     assert 0. <= denoising_strength <= 1., 'can only work with strength in [0.0, 1.0]'
 
-    p = StableDiffusionProcessingImg2Img(
+    with closing(StableDiffusionProcessingImg2Img(
         sd_model=shared.sd_model,
         outpath_samples=opts.outdir_samples or opts.outdir_img2img_samples,
         outpath_grids=opts.outdir_grids or opts.outdir_img2img_grids,
@@ -175,29 +175,28 @@ def img2img(id_task: str, mode: int, prompt: str, negative_prompt: str, prompt_s
         inpaint_full_res_padding=inpaint_full_res_padding,
         inpainting_mask_invert=inpainting_mask_invert,
         override_settings=override_settings,
-    )
+    )) as p:
 
-    p.scripts = modules.scripts.scripts_img2img
-    p.script_args = args
+        p.scripts = modules.scripts.scripts_img2img
+        p.script_args = args
 
-    if shared.cmd_opts.enable_console_prompts:
-        print(f"\nimg2img: {prompt}", file=shared.progress_print_out)
+        if shared.cmd_opts.enable_console_prompts:
+            print(f"\nimg2img: {prompt}", file=shared.progress_print_out)
 
-    if mask:
-        p.extra_generation_params["Mask blur"] = mask_blur
+        if mask:
+            p.extra_generation_params["Mask blur"] = mask_blur
 
-    if is_batch:
-        assert not shared.cmd_opts.hide_ui_dir_config, "Launched with --hide-ui-dir-config, batch img2img disabled"
+        if is_batch:
+            assert not shared.cmd_opts.hide_ui_dir_config, "Launched with --hide-ui-dir-config, batch img2img disabled"
 
-        process_batch(p, img2img_batch_input_dir, img2img_batch_output_dir, img2img_batch_inpaint_mask_dir, args, to_scale=selected_scale_tab == 1, scale_by=scale_by)
+            process_batch(p, img2img_batch_input_dir, img2img_batch_output_dir, img2img_batch_inpaint_mask_dir, args, to_scale=selected_scale_tab == 1, scale_by=scale_by)
 
-        processed = Processed(p, [], p.seed, "")
-    else:
-        processed = modules.scripts.scripts_img2img.run(p, *args)
-        if processed is None:
-            processed = process_images(p)
+            processed = Processed(p, [], p.seed, "")
+        else:
+            processed = modules.scripts.scripts_img2img.run(p, *args)
+            if processed is None:
+                processed = process_images(p)
 
-    p.close()
 
     shared.total_tqdm.clear()
 

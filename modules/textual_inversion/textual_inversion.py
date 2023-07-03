@@ -1,5 +1,6 @@
 import os
 from collections import namedtuple
+from contextlib import closing
 
 import torch
 import tqdm
@@ -560,73 +561,72 @@ def train_embedding(id_task, embedding_name, learn_rate, batch_size, gradient_st
 
                     shared.sd_model.first_stage_model.to(devices.device)
 
-                    p = processing.StableDiffusionProcessingTxt2Img(
+                    with closing(processing.StableDiffusionProcessingTxt2Img(
                         sd_model=shared.sd_model,
                         do_not_save_grid=True,
                         do_not_save_samples=True,
                         do_not_reload_embeddings=True,
-                    )
+                    )) as p:
+                        if preview_from_txt2img:
+                            p.prompt = preview_prompt
+                            p.negative_prompt = preview_negative_prompt
+                            p.steps = preview_steps
+                            p.sampler_name = sd_samplers.samplers[preview_sampler_index].name
+                            p.cfg_scale = preview_cfg_scale
+                            p.seed = preview_seed
+                            p.width = preview_width
+                            p.height = preview_height
+                        else:
+                            p.prompt = batch.cond_text[0]
+                            p.steps = 20
+                            p.width = training_width
+                            p.height = training_height
 
-                    if preview_from_txt2img:
-                        p.prompt = preview_prompt
-                        p.negative_prompt = preview_negative_prompt
-                        p.steps = preview_steps
-                        p.sampler_name = sd_samplers.samplers[preview_sampler_index].name
-                        p.cfg_scale = preview_cfg_scale
-                        p.seed = preview_seed
-                        p.width = preview_width
-                        p.height = preview_height
-                    else:
-                        p.prompt = batch.cond_text[0]
-                        p.steps = 20
-                        p.width = training_width
-                        p.height = training_height
+                        preview_text = p.prompt
 
-                    preview_text = p.prompt
+                        processed = processing.process_images(p)
+                        image = processed.images[0] if len(processed.images) > 0 else None
 
-                    processed = processing.process_images(p)
-                    image = processed.images[0] if len(processed.images) > 0 else None
+                        if unload:
+                            shared.sd_model.first_stage_model.to(devices.cpu)
 
-                    if unload:
-                        shared.sd_model.first_stage_model.to(devices.cpu)
+                        if image is not None:
+                            shared.state.assign_current_image(image)
 
-                    if image is not None:
-                        shared.state.assign_current_image(image)
+                            last_saved_image, last_text_info = images.save_image(image, images_dir, "", p.seed, p.prompt, shared.opts.samples_format, processed.infotexts[0], p=p, forced_filename=forced_filename, save_to_dirs=False)
+                            last_saved_image += f", prompt: {preview_text}"
+
+                            if shared.opts.training_enable_tensorboard and shared.opts.training_tensorboard_save_images:
+                                tensorboard_add_image(tensorboard_writer, f"Validation at epoch {epoch_num}", image, embedding.step)
+
+                        if save_image_with_stored_embedding and os.path.exists(last_saved_file) and embedding_yet_to_be_embedded:
+
+                            last_saved_image_chunks = os.path.join(images_embeds_dir, f'{embedding_name}-{steps_done}.png')
+
+                            info = PngImagePlugin.PngInfo()
+                            data = torch.load(last_saved_file)
+                            info.add_text("sd-ti-embedding", embedding_to_b64(data))
+
+                            title = f"<{data.get('name', '???')}>"
+
+                            try:
+                                vectorSize = list(data['string_to_param'].values())[0].shape[0]
+                            except Exception:
+                                vectorSize = '?'
+
+                            checkpoint = sd_models.select_checkpoint()
+                            footer_left = checkpoint.model_name
+                            footer_mid = f'[{checkpoint.shorthash}]'
+                            footer_right = f'{vectorSize}v {steps_done}s'
+
+                            captioned_image = caption_image_overlay(image, title, footer_left, footer_mid, footer_right)
+                            captioned_image = insert_image_data_embed(captioned_image, data)
+
+                            captioned_image.save(last_saved_image_chunks, "PNG", pnginfo=info)
+                            embedding_yet_to_be_embedded = False
 
                         last_saved_image, last_text_info = images.save_image(image, images_dir, "", p.seed, p.prompt, shared.opts.samples_format, processed.infotexts[0], p=p, forced_filename=forced_filename, save_to_dirs=False)
                         last_saved_image += f", prompt: {preview_text}"
-
-                        if shared.opts.training_enable_tensorboard and shared.opts.training_tensorboard_save_images:
-                            tensorboard_add_image(tensorboard_writer, f"Validation at epoch {epoch_num}", image, embedding.step)
-
-                    if save_image_with_stored_embedding and os.path.exists(last_saved_file) and embedding_yet_to_be_embedded:
-
-                        last_saved_image_chunks = os.path.join(images_embeds_dir, f'{embedding_name}-{steps_done}.png')
-
-                        info = PngImagePlugin.PngInfo()
-                        data = torch.load(last_saved_file)
-                        info.add_text("sd-ti-embedding", embedding_to_b64(data))
-
-                        title = f"<{data.get('name', '???')}>"
-
-                        try:
-                            vectorSize = list(data['string_to_param'].values())[0].shape[0]
-                        except Exception:
-                            vectorSize = '?'
-
-                        checkpoint = sd_models.select_checkpoint()
-                        footer_left = checkpoint.model_name
-                        footer_mid = f'[{checkpoint.shorthash}]'
-                        footer_right = f'{vectorSize}v {steps_done}s'
-
-                        captioned_image = caption_image_overlay(image, title, footer_left, footer_mid, footer_right)
-                        captioned_image = insert_image_data_embed(captioned_image, data)
-
-                        captioned_image.save(last_saved_image_chunks, "PNG", pnginfo=info)
-                        embedding_yet_to_be_embedded = False
-
-                    last_saved_image, last_text_info = images.save_image(image, images_dir, "", p.seed, p.prompt, shared.opts.samples_format, processed.infotexts[0], p=p, forced_filename=forced_filename, save_to_dirs=False)
-                    last_saved_image += f", prompt: {preview_text}"
 
                 shared.state.job_no = embedding.step
 
