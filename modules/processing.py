@@ -756,6 +756,8 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 p.scripts.postprocess_batch(p, x_samples_ddim, batch_number=n)
 
             for i, x_sample in enumerate(x_samples_ddim):
+                if state.interrupted:
+                    break
                 p.batch_index = i
 
                 x_sample = 255. * np.moveaxis(x_sample.cpu().numpy(), 0, 2)
@@ -991,9 +993,8 @@ class StableDiffusionProcessingTxt2Img(StableDiffusionProcessing):
         x = create_random_tensors([opt_C, self.height // opt_f, self.width // opt_f], seeds=seeds, subseeds=subseeds, subseed_strength=self.subseed_strength, seed_resize_from_h=self.seed_resize_from_h, seed_resize_from_w=self.seed_resize_from_w, p=self)
         samples = self.sampler.sample(self, x, conditioning, unconditional_conditioning, image_conditioning=self.txt2img_image_conditioning(x))
 
-        if not self.enable_hr:
+        if not self.enable_hr or shared.state.interrupted or shared.state.skipped:
             return samples
-
         self.is_hr_pass = True
 
         target_width = self.hr_upscale_to_x
