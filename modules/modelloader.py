@@ -52,7 +52,8 @@ def load_models(model_path: str, model_url: str = None, command_path: str = None
             else:
                 output.append(model_url)
 
-    except Exception:
+    except Exception as e:
+        print(f"Error loading models: {e}")
         pass
 
     return output

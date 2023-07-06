@@ -416,6 +416,7 @@ class SdModelData:
         if self.sd_model is None:
             with self.lock:
                 if self.sd_model is not None or self.was_loaded_at_least_once:
+                    print("Model was loaded by another thread while waiting for lock")
                     return self.sd_model
 
                 try:
@@ -517,9 +518,12 @@ def load_model(checkpoint_info=None, already_loaded_state_dict=None):
 
 
 def reload_model_weights(sd_model=None, info=None):
+    unload_model_weights(sd_model, info)
     from modules import lowvram, devices, sd_hijack
-    checkpoint_info = info or select_checkpoint()
-
+    try:
+        checkpoint_info = info or select_checkpoint()
+    except FileNotFoundError as e:
+        print("File already existed")
     if not sd_model:
         sd_model = model_data.sd_model
 
