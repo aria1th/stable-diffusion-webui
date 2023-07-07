@@ -518,12 +518,11 @@ def load_model(checkpoint_info=None, already_loaded_state_dict=None):
 
 
 def reload_model_weights(sd_model=None, info=None):
-    unload_model_weights(sd_model, info)
     from modules import lowvram, devices, sd_hijack
     try:
         checkpoint_info = info or select_checkpoint()
     except FileNotFoundError as e:
-        print("File already existed")
+        print("File not exists")
     if not sd_model:
         sd_model = model_data.sd_model
 
@@ -532,6 +531,7 @@ def reload_model_weights(sd_model=None, info=None):
     else:
         current_checkpoint_info = sd_model.sd_checkpoint_info
         if sd_model.sd_model_checkpoint == checkpoint_info.filename:
+            print("Model already loaded "+checkpoint_info.filename)
             return
 
         sd_unet.apply_unet("None")
@@ -552,6 +552,7 @@ def reload_model_weights(sd_model=None, info=None):
     timer.record("find config")
 
     if sd_model is None or checkpoint_config != sd_model.used_config:
+        unload_model_weights(sd_model, info)
         del sd_model
         load_model(checkpoint_info, already_loaded_state_dict=state_dict)
         return model_data.sd_model
