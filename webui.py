@@ -221,9 +221,8 @@ def configure_sigint_handler():
         # as then the coverage report won't be generated.
         signal.signal(signal.SIGINT, sigint_handler)
 
-
 def configure_opts_onchange():
-    shared.opts.onchange("sd_model_checkpoint", wrap_queued_call(lambda: modules.sd_models.unload_model_weights() == "dummy" or modules.sd_models.reload_model_weights()), call=False)
+    shared.opts.onchange("sd_model_checkpoint", wrap_queued_call(lambda: shared.state.job_count == 0 and modules.sd_models.unload_model_weights() == "dummy" or modules.sd_models.reload_model_weights()), call=False)
     shared.opts.onchange("sd_vae", wrap_queued_call(lambda: modules.sd_vae.reload_vae_weights()), call=False)
     shared.opts.onchange("sd_vae_as_default", wrap_queued_call(lambda: modules.sd_vae.reload_vae_weights()), call=False)
     shared.opts.onchange("temp_dir", ui_tempdir.on_tmpdir_changed)
