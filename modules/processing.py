@@ -809,7 +809,6 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
         @contextmanager
         def split_attention(*args, **kwargs):
             yield
-            
         flush = lambda: None
     import random
     saved_rng_state = random.getstate()
