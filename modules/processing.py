@@ -803,7 +803,7 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     vae_model = p.sd_model.first_stage_model
     try:
         from hyper_tile import split_attention, flush
-    except (ImportError, ModuleNotFoundError): # pip install git+https://github.com/tfernd/HyperTile@2ef64b2800d007d305755c33550537410310d7df 
+    except (ImportError, ModuleNotFoundError): # pip install git+https://github.com/tfernd/HyperTile@2ef64b2800d007d305755c33550537410310d7df
         split_attention = lambda *args, **kwargs: lambda x: x # return a no-op context manager
         flush = lambda: None
     import random
