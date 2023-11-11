@@ -799,187 +799,202 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
 
     infotexts = []
     output_images = []
+    unet_object = p.sd_model.model
+    vae_model = p.sd_model.first_stage_model
+    try:
+        from hyper_tile import split_attention, flush
+    except (ImportError, ModuleNotFoundError): # pip install git+https://github.com/tfernd/HyperTile@2ef64b2800d007d305755c33550537410310d7df 
+        split_attention = lambda *args, **kwargs: lambda x: x # return a no-op context manager
+        flush = lambda: None
+    split_disabled = False # TODO: Make this a setting
+    import random
+    saved_rng_state = random.getstate()
+    random.seed(p.seed) # hyper_tile uses random, so we need to seed it
 
-    with torch.no_grad(), p.sd_model.ema_scope():
-        with devices.autocast():
-            p.init(p.all_prompts, p.all_seeds, p.all_subseeds)
+    with split_attention(vae_model, aspect_ratio=1, tile_size=128, disable=split_disabled):
+        with split_attention(unet_object, aspect_ratio=1, tile_size=256, swap_size=2, disable=split_disabled):
+            flush()
+        with torch.no_grad(), p.sd_model.ema_scope():
+            with devices.autocast():
+                p.init(p.all_prompts, p.all_seeds, p.all_subseeds)
 
-            # for OSX, loading the model during sampling changes the generated picture, so it is loaded here
-            if shared.opts.live_previews_enable and opts.show_progress_type == "Approx NN":
-                sd_vae_approx.model()
+                # for OSX, loading the model during sampling changes the generated picture, so it is loaded here
+                if shared.opts.live_previews_enable and opts.show_progress_type == "Approx NN":
+                    sd_vae_approx.model()
 
-            sd_unet.apply_unet()
+                sd_unet.apply_unet()
 
-        if state.job_count == -1:
-            state.job_count = p.n_iter
+            if state.job_count == -1:
+                state.job_count = p.n_iter
 
-        for n in range(p.n_iter):
-            p.iteration = n
+            for n in range(p.n_iter):
+                p.iteration = n
 
-            if state.skipped:
-                state.skipped = False
+                if state.skipped:
+                    state.skipped = False
 
-            if state.interrupted:
-                break
+                if state.interrupted:
+                    break
 
-            sd_models.reload_model_weights()  # model can be changed for example by refiner
-
-            p.prompts = p.all_prompts[n * p.batch_size:(n + 1) * p.batch_size]
-            p.negative_prompts = p.all_negative_prompts[n * p.batch_size:(n + 1) * p.batch_size]
-            p.seeds = p.all_seeds[n * p.batch_size:(n + 1) * p.batch_size]
-            p.subseeds = p.all_subseeds[n * p.batch_size:(n + 1) * p.batch_size]
-
-            p.rng = rng.ImageRNG((opt_C, p.height // opt_f, p.width // opt_f), p.seeds, subseeds=p.subseeds, subseed_strength=p.subseed_strength, seed_resize_from_h=p.seed_resize_from_h, seed_resize_from_w=p.seed_resize_from_w)
-
-            if p.scripts is not None:
-                p.scripts.before_process_batch(p, batch_number=n, prompts=p.prompts, seeds=p.seeds, subseeds=p.subseeds)
-
-            if len(p.prompts) == 0:
-                break
-
-            p.parse_extra_network_prompts()
-
-            if not p.disable_extra_networks:
-                with devices.autocast():
-                    extra_networks.activate(p, p.extra_network_data)
-
-            if p.scripts is not None:
-                p.scripts.process_batch(p, batch_number=n, prompts=p.prompts, seeds=p.seeds, subseeds=p.subseeds)
-
-            # params.txt should be saved after scripts.process_batch, since the
-            # infotext could be modified by that callback
-            # Example: a wildcard processed by process_batch sets an extra model
-            # strength, which is saved as "Model Strength: 1.0" in the infotext
-            if n == 0:
-                with open(os.path.join(paths.data_path, "params.txt"), "w", encoding="utf8") as file:
-                    processed = Processed(p, [])
-                    file.write(processed.infotext(p, 0))
-
-            p.setup_conds()
-
-            for comment in model_hijack.comments:
-                p.comment(comment)
-
-            p.extra_generation_params.update(model_hijack.extra_generation_params)
-
-            if p.n_iter > 1:
-                shared.state.job = f"Batch {n+1} out of {p.n_iter}"
-
-            with devices.without_autocast() if devices.unet_needs_upcast else devices.autocast():
-                samples_ddim = p.sample(conditioning=p.c, unconditional_conditioning=p.uc, seeds=p.seeds, subseeds=p.subseeds, subseed_strength=p.subseed_strength, prompts=p.prompts)
-
-            if getattr(samples_ddim, 'already_decoded', False):
-                x_samples_ddim = samples_ddim
-            else:
-                if opts.sd_vae_decode_method != 'Full':
-                    p.extra_generation_params['VAE Decoder'] = opts.sd_vae_decode_method
-
-                x_samples_ddim = decode_latent_batch(p.sd_model, samples_ddim, target_device=devices.cpu, check_for_nans=True)
-
-            x_samples_ddim = torch.stack(x_samples_ddim).float()
-            x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
-
-            del samples_ddim
-
-            if lowvram.is_enabled(shared.sd_model):
-                lowvram.send_everything_to_cpu()
-
-            devices.torch_gc()
-
-            state.nextjob()
-
-            if p.scripts is not None:
-                p.scripts.postprocess_batch(p, x_samples_ddim, batch_number=n)
+                sd_models.reload_model_weights()  # model can be changed for example by refiner
 
                 p.prompts = p.all_prompts[n * p.batch_size:(n + 1) * p.batch_size]
                 p.negative_prompts = p.all_negative_prompts[n * p.batch_size:(n + 1) * p.batch_size]
+                p.seeds = p.all_seeds[n * p.batch_size:(n + 1) * p.batch_size]
+                p.subseeds = p.all_subseeds[n * p.batch_size:(n + 1) * p.batch_size]
 
-                batch_params = scripts.PostprocessBatchListArgs(list(x_samples_ddim))
-                p.scripts.postprocess_batch_list(p, batch_params, batch_number=n)
-                x_samples_ddim = batch_params.images
-
-            def infotext(index=0, use_main_prompt=False):
-                return create_infotext(p, p.prompts, p.seeds, p.subseeds, use_main_prompt=use_main_prompt, index=index, all_negative_prompts=p.negative_prompts)
-
-            save_samples = p.save_samples()
-
-            for i, x_sample in enumerate(x_samples_ddim):
-                p.batch_index = i
-
-                x_sample = 255. * np.moveaxis(x_sample.cpu().numpy(), 0, 2)
-                x_sample = x_sample.astype(np.uint8)
-
-                if p.restore_faces:
-                    if save_samples and opts.save_images_before_face_restoration:
-                        images.save_image(Image.fromarray(x_sample), p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-face-restoration")
-
-                    devices.torch_gc()
-
-                    x_sample = modules.face_restoration.restore_faces(x_sample)
-                    devices.torch_gc()
-
-                image = Image.fromarray(x_sample)
+                p.rng = rng.ImageRNG((opt_C, p.height // opt_f, p.width // opt_f), p.seeds, subseeds=p.subseeds, subseed_strength=p.subseed_strength, seed_resize_from_h=p.seed_resize_from_h, seed_resize_from_w=p.seed_resize_from_w)
 
                 if p.scripts is not None:
-                    pp = scripts.PostprocessImageArgs(image)
-                    p.scripts.postprocess_image(p, pp)
-                    image = pp.image
-                if p.color_corrections is not None and i < len(p.color_corrections):
-                    if save_samples and opts.save_images_before_color_correction:
-                        image_without_cc = apply_overlay(image, p.paste_to, i, p.overlay_images)
-                        images.save_image(image_without_cc, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-color-correction")
-                    image = apply_color_correction(p.color_corrections[i], image)
+                    p.scripts.before_process_batch(p, batch_number=n, prompts=p.prompts, seeds=p.seeds, subseeds=p.subseeds)
 
-                image = apply_overlay(image, p.paste_to, i, p.overlay_images)
+                if len(p.prompts) == 0:
+                    break
 
-                if save_samples:
-                    images.save_image(image, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p)
+                p.parse_extra_network_prompts()
 
-                text = infotext(i)
-                infotexts.append(text)
-                if opts.enable_pnginfo:
-                    image.info["parameters"] = text
-                output_images.append(image)
-                if save_samples and hasattr(p, 'mask_for_overlay') and p.mask_for_overlay and any([opts.save_mask, opts.save_mask_composite, opts.return_mask, opts.return_mask_composite]):
-                    image_mask = p.mask_for_overlay.convert('RGB')
-                    image_mask_composite = Image.composite(image.convert('RGBA').convert('RGBa'), Image.new('RGBa', image.size), images.resize_image(2, p.mask_for_overlay, image.width, image.height).convert('L')).convert('RGBA')
+                if not p.disable_extra_networks:
+                    with devices.autocast():
+                        extra_networks.activate(p, p.extra_network_data)
 
-                    if opts.save_mask:
-                        images.save_image(image_mask, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask")
+                if p.scripts is not None:
+                    p.scripts.process_batch(p, batch_number=n, prompts=p.prompts, seeds=p.seeds, subseeds=p.subseeds)
 
-                    if opts.save_mask_composite:
-                        images.save_image(image_mask_composite, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask-composite")
+                # params.txt should be saved after scripts.process_batch, since the
+                # infotext could be modified by that callback
+                # Example: a wildcard processed by process_batch sets an extra model
+                # strength, which is saved as "Model Strength: 1.0" in the infotext
+                if n == 0:
+                    with open(os.path.join(paths.data_path, "params.txt"), "w", encoding="utf8") as file:
+                        processed = Processed(p, [])
+                        file.write(processed.infotext(p, 0))
 
-                    if opts.return_mask:
-                        output_images.append(image_mask)
+                p.setup_conds()
 
-                    if opts.return_mask_composite:
-                        output_images.append(image_mask_composite)
+                for comment in model_hijack.comments:
+                    p.comment(comment)
 
-            del x_samples_ddim
+                p.extra_generation_params.update(model_hijack.extra_generation_params)
 
-            devices.torch_gc()
+                if p.n_iter > 1:
+                    shared.state.job = f"Batch {n+1} out of {p.n_iter}"
 
-        if not infotexts:
-            infotexts.append(Processed(p, []).infotext(p, 0))
+                with devices.without_autocast() if devices.unet_needs_upcast else devices.autocast():
+                    samples_ddim = p.sample(conditioning=p.c, unconditional_conditioning=p.uc, seeds=p.seeds, subseeds=p.subseeds, subseed_strength=p.subseed_strength, prompts=p.prompts)
 
-        p.color_corrections = None
+                if getattr(samples_ddim, 'already_decoded', False):
+                    x_samples_ddim = samples_ddim
+                else:
+                    if opts.sd_vae_decode_method != 'Full':
+                        p.extra_generation_params['VAE Decoder'] = opts.sd_vae_decode_method
 
-        index_of_first_image = 0
-        unwanted_grid_because_of_img_count = len(output_images) < 2 and opts.grid_only_if_multiple
-        if (opts.return_grid or opts.grid_save) and not p.do_not_save_grid and not unwanted_grid_because_of_img_count:
-            grid = images.image_grid(output_images, p.batch_size)
+                    x_samples_ddim = decode_latent_batch(p.sd_model, samples_ddim, target_device=devices.cpu, check_for_nans=True)
 
-            if opts.return_grid:
-                text = infotext(use_main_prompt=True)
-                infotexts.insert(0, text)
-                if opts.enable_pnginfo:
-                    grid.info["parameters"] = text
-                output_images.insert(0, grid)
-                index_of_first_image = 1
-            if opts.grid_save:
-                images.save_image(grid, p.outpath_grids, "grid", p.all_seeds[0], p.all_prompts[0], opts.grid_format, info=infotext(use_main_prompt=True), short_filename=not opts.grid_extended_filename, p=p, grid=True)
+                x_samples_ddim = torch.stack(x_samples_ddim).float()
+                x_samples_ddim = torch.clamp((x_samples_ddim + 1.0) / 2.0, min=0.0, max=1.0)
 
+                del samples_ddim
+
+                if lowvram.is_enabled(shared.sd_model):
+                    lowvram.send_everything_to_cpu()
+
+                devices.torch_gc()
+
+                state.nextjob()
+
+                if p.scripts is not None:
+                    p.scripts.postprocess_batch(p, x_samples_ddim, batch_number=n)
+
+                    p.prompts = p.all_prompts[n * p.batch_size:(n + 1) * p.batch_size]
+                    p.negative_prompts = p.all_negative_prompts[n * p.batch_size:(n + 1) * p.batch_size]
+
+                    batch_params = scripts.PostprocessBatchListArgs(list(x_samples_ddim))
+                    p.scripts.postprocess_batch_list(p, batch_params, batch_number=n)
+                    x_samples_ddim = batch_params.images
+
+                def infotext(index=0, use_main_prompt=False):
+                    return create_infotext(p, p.prompts, p.seeds, p.subseeds, use_main_prompt=use_main_prompt, index=index, all_negative_prompts=p.negative_prompts)
+
+                save_samples = p.save_samples()
+
+                for i, x_sample in enumerate(x_samples_ddim):
+                    p.batch_index = i
+
+                    x_sample = 255. * np.moveaxis(x_sample.cpu().numpy(), 0, 2)
+                    x_sample = x_sample.astype(np.uint8)
+
+                    if p.restore_faces:
+                        if save_samples and opts.save_images_before_face_restoration:
+                            images.save_image(Image.fromarray(x_sample), p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-face-restoration")
+
+                        devices.torch_gc()
+
+                        x_sample = modules.face_restoration.restore_faces(x_sample)
+                        devices.torch_gc()
+
+                    image = Image.fromarray(x_sample)
+
+                    if p.scripts is not None:
+                        pp = scripts.PostprocessImageArgs(image)
+                        p.scripts.postprocess_image(p, pp)
+                        image = pp.image
+                    if p.color_corrections is not None and i < len(p.color_corrections):
+                        if save_samples and opts.save_images_before_color_correction:
+                            image_without_cc = apply_overlay(image, p.paste_to, i, p.overlay_images)
+                            images.save_image(image_without_cc, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-before-color-correction")
+                        image = apply_color_correction(p.color_corrections[i], image)
+
+                    image = apply_overlay(image, p.paste_to, i, p.overlay_images)
+
+                    if save_samples:
+                        images.save_image(image, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p)
+
+                    text = infotext(i)
+                    infotexts.append(text)
+                    if opts.enable_pnginfo:
+                        image.info["parameters"] = text
+                    output_images.append(image)
+                    if save_samples and hasattr(p, 'mask_for_overlay') and p.mask_for_overlay and any([opts.save_mask, opts.save_mask_composite, opts.return_mask, opts.return_mask_composite]):
+                        image_mask = p.mask_for_overlay.convert('RGB')
+                        image_mask_composite = Image.composite(image.convert('RGBA').convert('RGBa'), Image.new('RGBa', image.size), images.resize_image(2, p.mask_for_overlay, image.width, image.height).convert('L')).convert('RGBA')
+
+                        if opts.save_mask:
+                            images.save_image(image_mask, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask")
+
+                        if opts.save_mask_composite:
+                            images.save_image(image_mask_composite, p.outpath_samples, "", p.seeds[i], p.prompts[i], opts.samples_format, info=infotext(i), p=p, suffix="-mask-composite")
+
+                        if opts.return_mask:
+                            output_images.append(image_mask)
+
+                        if opts.return_mask_composite:
+                            output_images.append(image_mask_composite)
+
+                del x_samples_ddim
+
+                devices.torch_gc()
+
+            if not infotexts:
+                infotexts.append(Processed(p, []).infotext(p, 0))
+
+            p.color_corrections = None
+
+            index_of_first_image = 0
+            unwanted_grid_because_of_img_count = len(output_images) < 2 and opts.grid_only_if_multiple
+            if (opts.return_grid or opts.grid_save) and not p.do_not_save_grid and not unwanted_grid_because_of_img_count:
+                grid = images.image_grid(output_images, p.batch_size)
+
+                if opts.return_grid:
+                    text = infotext(use_main_prompt=True)
+                    infotexts.insert(0, text)
+                    if opts.enable_pnginfo:
+                        grid.info["parameters"] = text
+                    output_images.insert(0, grid)
+                    index_of_first_image = 1
+                if opts.grid_save:
+                    images.save_image(grid, p.outpath_grids, "grid", p.all_seeds[0], p.all_prompts[0], opts.grid_format, info=infotext(use_main_prompt=True), short_filename=not opts.grid_extended_filename, p=p, grid=True)
+
+    random.setstate(saved_rng_state) # restore the random state
     if not p.disable_extra_networks and p.extra_network_data:
         extra_networks.deactivate(p, p.extra_network_data)
 
