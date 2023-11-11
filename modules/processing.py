@@ -804,7 +804,12 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     try:
         from hyper_tile import split_attention, flush
     except (ImportError, ModuleNotFoundError): # pip install git+https://github.com/tfernd/HyperTile@2ef64b2800d007d305755c33550537410310d7df
-        split_attention = lambda *args, **kwargs: lambda x: x # return a no-op context manager
+        from contextlib import contextmanager
+        # generate a dummy context manager that does nothing
+        @contextmanager
+        def split_attention(*args, **kwargs):
+            yield
+            
         flush = lambda: None
     import random
     saved_rng_state = random.getstate()
