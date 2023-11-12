@@ -24,6 +24,7 @@ from modules.shared import opts, cmd_opts, state
 import modules.shared as shared
 import modules.paths as paths
 import modules.face_restoration
+from modules.hypertile import split_attention, set_hypertile_seed
 import modules.images as images
 import modules.styles
 import modules.sd_models as sd_models
@@ -801,19 +802,6 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
     output_images = []
     unet_object = p.sd_model.model
     vae_model = p.sd_model.first_stage_model
-    try:
-        from hyper_tile import split_attention, flush
-    except (ImportError, ModuleNotFoundError): # pip install git+https://github.com/tfernd/HyperTile@2ef64b2800d007d305755c33550537410310d7df
-        from contextlib import contextmanager
-        # generate a dummy context manager that does nothing
-        @contextmanager
-        def split_attention(*args, **kwargs):
-            yield
-        flush = lambda: None
-    import random
-    saved_rng_state = random.getstate()
-    random.seed(p.seed) # hyper_tile uses random, so we need to seed it
-
     with torch.no_grad(), p.sd_model.ema_scope():
         with devices.autocast():
             p.init(p.all_prompts, p.all_seeds, p.all_subseeds)
@@ -886,9 +874,10 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 while gcd % (largest_tile_size_available * 2) == 0:
                     largest_tile_size_available *= 2
                 aspect_ratio = p.width / p.height
+                set_hypertile_seed(p.seed)
                 with split_attention(vae_model, aspect_ratio=aspect_ratio, tile_size=min(largest_tile_size_available, 128), disable=not shared.opts.hypertile_split_vae_attn):
                     with split_attention(unet_object, aspect_ratio=aspect_ratio, tile_size=min(largest_tile_size_available, 256), swap_size=2, disable=not shared.opts.hypertile_split_unet_attn):
-                        flush()
+                        devices.torch_gc()
                         samples_ddim = p.sample(conditioning=p.c, unconditional_conditioning=p.uc, seeds=p.seeds, subseeds=p.subseeds, subseed_strength=p.subseed_strength, prompts=p.prompts)
 
             if getattr(samples_ddim, 'already_decoded', False):
@@ -897,7 +886,6 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
                 if opts.sd_vae_decode_method != 'Full':
                     p.extra_generation_params['VAE Decoder'] = opts.sd_vae_decode_method
                 with split_attention(vae_model, aspect_ratio=aspect_ratio, tile_size=min(largest_tile_size_available, 128), disable=not shared.opts.hypertile_split_vae_attn):
-                    flush()
                     x_samples_ddim = decode_latent_batch(p.sd_model, samples_ddim, target_device=devices.cpu, check_for_nans=True)
 
             x_samples_ddim = torch.stack(x_samples_ddim).float()
@@ -1004,7 +992,6 @@ def process_images_inner(p: StableDiffusionProcessing) -> Processed:
             if opts.grid_save:
                 images.save_image(grid, p.outpath_grids, "grid", p.all_seeds[0], p.all_prompts[0], opts.grid_format, info=infotext(use_main_prompt=True), short_filename=not opts.grid_extended_filename, p=p, grid=True)
 
-    random.setstate(saved_rng_state)
     if not p.disable_extra_networks and p.extra_network_data:
         extra_networks.deactivate(p, p.extra_network_data)
 
