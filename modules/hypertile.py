@@ -92,7 +92,7 @@ def random_divisor(value: int, min_value: int, /, max_options: int = 1) -> int:
 
 def set_hypertile_seed(seed: int) -> None:
     RNG_INSTANCE.seed(seed)
-    
+
 def largest_tile_size_available(width:int, height:int) -> int:
     """
     Calculates the largest tile size available for a given width and height
@@ -178,12 +178,10 @@ def split_attention(
                 if any(layer_name.endswith(try_name) for try_name in DEPTH_LAYERS[depth]):
                     # print input shape for debugging
                     logging.info(f"HyperTile hijacking attention layer at depth {depth}: {layer_name}")
-
-                    # save original forward for recovery later
-                    setattr(module, "_original_forward_hypertile", module.forward)
-                    setattr(module, "forward", self_attn_forward(module.forward, depth, layer_name, module))
-
-                    setattr(module, "_split_sizes_hypertile", [])
+                    # hijack
+                    module._original_forward_hypertile = module.forward
+                    module.forward = self_attn_forward(module.forward, depth, layer_name, module)
+                    module._split_sizes_hypertile = []
         yield
     finally:
         for layer_name, module in layer.named_modules():
@@ -191,7 +189,7 @@ def split_attention(
             if hasattr(module, "_original_forward_hypertile"):
                 if module._split_sizes_hypertile:
                     logging.debug(f"layer {layer_name} splitted with ({module._split_sizes_hypertile})")
-
-                setattr(module, "forward", module._original_forward_hypertile)
+                # recover
+                module.forward = module._original_forward_hypertile
                 del module._original_forward_hypertile
                 del module._split_sizes_hypertile
