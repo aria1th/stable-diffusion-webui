@@ -1,5 +1,6 @@
 """
 Hypertile module for splitting attention layers in SD-1.5 U-Net and SD-1.5 VAE
+Warn : The patch works well only if the input image has a width and height that are multiples of 128
 Author : @tfernd Github : https://github.com/tfernd/HyperTile
 """
 
@@ -73,12 +74,17 @@ DEPTH_LAYERS = {
 RNG_INSTANCE = random.Random()
 
 def random_divisor(value: int, min_value: int, /, max_options: int = 1) -> int:
+    """
+    Returns a random divisor of value that
+        x * min_value <= value
+    if max_options is 1, the behavior is deterministic
+    """
     min_value = min(min_value, value)
 
     # All big divisors of value (inclusive)
-    divisors = [i for i in range(min_value, value + 1) if value % i == 0]
+    divisors = [i for i in range(min_value, value + 1) if value % i == 0] # divisors in small -> big order
 
-    ns = [value // i for i in divisors[:max_options]]  # has at least 1 element
+    ns = [value // i for i in divisors[:max_options]]  # has at least 1 element # big -> small order
 
     idx = RNG_INSTANCE.randint(0, len(ns) - 1)
 
@@ -86,6 +92,17 @@ def random_divisor(value: int, min_value: int, /, max_options: int = 1) -> int:
 
 def set_hypertile_seed(seed: int) -> None:
     RNG_INSTANCE.seed(seed)
+    
+def largest_tile_size_available(width:int, height:int) -> int:
+    """
+    Calculates the largest tile size available for a given width and height
+    Tile size is always a power of 2
+    """
+    gcd = math.gcd(width, height)
+    largest_tile_size_available = 1
+    while gcd % (largest_tile_size_available * 2) == 0:
+        largest_tile_size_available *= 2
+    return largest_tile_size_available
 
 @contextmanager
 def split_attention(
@@ -121,7 +138,7 @@ def split_attention(
                 nw = random_divisor(w, latent_tile_size, swap_size)
 
                 if nh * nw > 1:
-                    x = rearrange(x, "b c (nh h) (nw w) -> (b nh nw) c h w", nh=nh, nw=nw)
+                    x = rearrange(x, "b c (nh h) (nw w) -> (b nh nw) c h w", nh=nh, nw=nw) # split into nh * nw tiles
 
                 out = forward(x, *args[1:], **kwargs)
 
@@ -159,6 +176,7 @@ def split_attention(
         for depth in range(max_depth + 1):
             for layer_name, module in layer.named_modules():
                 if any(layer_name.endswith(try_name) for try_name in DEPTH_LAYERS[depth]):
+                    # print input shape for debugging
                     logging.info(f"HyperTile hijacking attention layer at depth {depth}: {layer_name}")
 
                     # save original forward for recovery later
