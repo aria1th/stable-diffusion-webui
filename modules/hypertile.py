@@ -9,7 +9,7 @@ from typing import Callable
 from typing_extensions import Literal
 
 import logging
-from functools import wraps
+from functools import wraps, cache
 from contextlib import contextmanager
 
 import math
@@ -104,6 +104,39 @@ def largest_tile_size_available(width:int, height:int) -> int:
         largest_tile_size_available *= 2
     return largest_tile_size_available
 
+def iterative_closest_divisors(hw:int, aspect_ratio:float) -> tuple[int, int]:
+    """
+    Finds h and w such that h*w = hw and h/w = aspect_ratio
+    We check all possible divisors of hw and return the closest to the aspect ratio
+    """
+    divisors = [i for i in range(2, hw + 1) if hw % i == 0] # all divisors of hw
+    pairs = [(i, hw // i) for i in divisors] # all pairs of divisors of hw
+    ratios = [w/h for h, w in pairs] # all ratios of pairs of divisors of hw
+    closest_ratio = min(ratios, key=lambda x: abs(x - aspect_ratio)) # closest ratio to aspect_ratio
+    closest_pair = pairs[ratios.index(closest_ratio)] # closest pair of divisors to aspect_ratio
+    return closest_pair
+
+@cache
+def find_hw_candidates(hw:int, aspect_ratio:float) -> tuple[int, int]:
+    """
+    Finds h and w such that h*w = hw and h/w = aspect_ratio
+    """
+    h, w = round(math.sqrt(hw * aspect_ratio)), round(math.sqrt(hw / aspect_ratio))
+    # find h and w such that h*w = hw and h/w = aspect_ratio
+    if h * w != hw:
+        w_candidate = hw / h
+        # check if w is an integer
+        if not w_candidate.is_integer():
+            h_candidate = hw / w
+            # check if h is an integer
+            if not h_candidate.is_integer():
+                return iterative_closest_divisors(hw, aspect_ratio)
+            else:
+                h = int(h_candidate)
+        else:
+            w = int(w_candidate)
+    return h, w
+
 @contextmanager
 def split_attention(
     layer: nn.Module,
@@ -147,10 +180,9 @@ def split_attention(
 
             # U-Net
             else:
-                hw = x.size(1)
-                h, w = round(math.sqrt(hw * aspect_ratio)), round(math.sqrt(hw / aspect_ratio))
-                # h*w should be equal to hw
-                assert h * w == hw, f"Invalid aspect ratio {aspect_ratio} for input of shape {x.shape}"
+                hw: int = x.size(1)
+                h, w = find_hw_candidates(hw, aspect_ratio)
+                assert h * w == hw, f"Invalid aspect ratio {aspect_ratio} for input of shape {x.shape}, hw={hw}, h={h}, w={w}"
 
                 factor = 2**depth if scale_depth else 1
                 nh = random_divisor(h, latent_tile_size * factor, swap_size)
