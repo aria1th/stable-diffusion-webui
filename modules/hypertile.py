@@ -71,6 +71,107 @@ DEPTH_LAYERS = {
         "middle_block.1.transformer_blocks.0.attn1",
     ],
 }
+# XL layers, thanks for GitHub@Captain-Bacon for the help
+DEPTH_LAYERS_XL = {
+    0: [
+        # SD 1.5 U-Net (diffusers)
+        "down_blocks.0.attentions.0.transformer_blocks.0.attn1",
+        "down_blocks.0.attentions.1.transformer_blocks.0.attn1",
+        "up_blocks.3.attentions.0.transformer_blocks.0.attn1",
+        "up_blocks.3.attentions.1.transformer_blocks.0.attn1",
+        "up_blocks.3.attentions.2.transformer_blocks.0.attn1",
+        # SD 1.5 U-Net (ldm)
+        "input_blocks.4.1.transformer_blocks.0.attn1",
+        "input_blocks.5.1.transformer_blocks.0.attn1",
+        "output_blocks.3.1.transformer_blocks.0.attn1",
+        "output_blocks.4.1.transformer_blocks.0.attn1",
+        "output_blocks.5.1.transformer_blocks.0.attn1",
+        # SD 1.5 VAE
+        "decoder.mid_block.attentions.0",
+        "decoder.mid.attn_1",
+    ],
+    1: [
+        # SD 1.5 U-Net (diffusers)
+        #"down_blocks.1.attentions.0.transformer_blocks.0.attn1",
+        #"down_blocks.1.attentions.1.transformer_blocks.0.attn1",
+        #"up_blocks.2.attentions.0.transformer_blocks.0.attn1",
+        #"up_blocks.2.attentions.1.transformer_blocks.0.attn1",
+        #"up_blocks.2.attentions.2.transformer_blocks.0.attn1",
+        # SD 1.5 U-Net (ldm)
+        "input_blocks.4.1.transformer_blocks.1.attn1",
+        "input_blocks.5.1.transformer_blocks.1.attn1",
+        "output_blocks.3.1.transformer_blocks.1.attn1",
+        "output_blocks.4.1.transformer_blocks.1.attn1",
+        "output_blocks.5.1.transformer_blocks.1.attn1",
+        "input_blocks.7.1.transformer_blocks.0.attn1",
+        "input_blocks.8.1.transformer_blocks.0.attn1",
+        "output_blocks.0.1.transformer_blocks.0.attn1",
+        "output_blocks.1.1.transformer_blocks.0.attn1",
+        "output_blocks.2.1.transformer_blocks.0.attn1",
+        "input_blocks.7.1.transformer_blocks.1.attn1",
+        "input_blocks.8.1.transformer_blocks.1.attn1",
+        "output_blocks.0.1.transformer_blocks.1.attn1",
+        "output_blocks.1.1.transformer_blocks.1.attn1",
+        "output_blocks.2.1.transformer_blocks.1.attn1",
+        "input_blocks.7.1.transformer_blocks.2.attn1",
+        "input_blocks.8.1.transformer_blocks.2.attn1",
+        "output_blocks.0.1.transformer_blocks.2.attn1",
+        "output_blocks.1.1.transformer_blocks.2.attn1",
+        "output_blocks.2.1.transformer_blocks.2.attn1",
+        "input_blocks.7.1.transformer_blocks.3.attn1",
+        "input_blocks.8.1.transformer_blocks.3.attn1",
+        "output_blocks.0.1.transformer_blocks.3.attn1",
+        "output_blocks.1.1.transformer_blocks.3.attn1",
+        "output_blocks.2.1.transformer_blocks.3.attn1",
+        "input_blocks.7.1.transformer_blocks.4.attn1",
+        "input_blocks.8.1.transformer_blocks.4.attn1",
+        "output_blocks.0.1.transformer_blocks.4.attn1",
+        "output_blocks.1.1.transformer_blocks.4.attn1",
+        "output_blocks.2.1.transformer_blocks.4.attn1",
+        "input_blocks.7.1.transformer_blocks.5.attn1",
+        "input_blocks.8.1.transformer_blocks.5.attn1",
+        "output_blocks.0.1.transformer_blocks.5.attn1",
+        "output_blocks.1.1.transformer_blocks.5.attn1",
+        "output_blocks.2.1.transformer_blocks.5.attn1",
+        "input_blocks.7.1.transformer_blocks.6.attn1",
+        "input_blocks.8.1.transformer_blocks.6.attn1",
+        "output_blocks.0.1.transformer_blocks.6.attn1",
+        "output_blocks.1.1.transformer_blocks.6.attn1",
+        "output_blocks.2.1.transformer_blocks.6.attn1",
+        "input_blocks.7.1.transformer_blocks.7.attn1",
+        "input_blocks.8.1.transformer_blocks.7.attn1",
+        "output_blocks.0.1.transformer_blocks.7.attn1",
+        "output_blocks.1.1.transformer_blocks.7.attn1",
+        "output_blocks.2.1.transformer_blocks.7.attn1",
+        "input_blocks.7.1.transformer_blocks.8.attn1",
+        "input_blocks.8.1.transformer_blocks.8.attn1",
+        "output_blocks.0.1.transformer_blocks.8.attn1",
+        "output_blocks.1.1.transformer_blocks.8.attn1",
+        "output_blocks.2.1.transformer_blocks.8.attn1",
+        "input_blocks.7.1.transformer_blocks.9.attn1",
+        "input_blocks.8.1.transformer_blocks.9.attn1",
+        "output_blocks.0.1.transformer_blocks.9.attn1",
+        "output_blocks.1.1.transformer_blocks.9.attn1",
+        "output_blocks.2.1.transformer_blocks.9.attn1",
+    ],
+    2: [
+        # SD 1.5 U-Net (diffusers)
+        "mid_block.attentions.0.transformer_blocks.0.attn1",
+        # SD 1.5 U-Net (ldm)
+        "middle_block.1.transformer_blocks.0.attn1",
+        "middle_block.1.transformer_blocks.1.attn1",
+        "middle_block.1.transformer_blocks.2.attn1",
+        "middle_block.1.transformer_blocks.3.attn1",
+        "middle_block.1.transformer_blocks.4.attn1",
+        "middle_block.1.transformer_blocks.5.attn1",
+        "middle_block.1.transformer_blocks.6.attn1",
+        "middle_block.1.transformer_blocks.7.attn1",
+        "middle_block.1.transformer_blocks.8.attn1",
+        "middle_block.1.transformer_blocks.9.attn1",
+    ],
+}
+
+
 RNG_INSTANCE = random.Random()
 
 def random_divisor(value: int, min_value: int, /, max_options: int = 1) -> int:
@@ -148,6 +249,7 @@ def split_attention(
     disable: bool = False,
     max_depth: Literal[0, 1, 2, 3] = 0,  # ! Try 0 or 1
     scale_depth: bool = False,  # scale the tile-size depending on the depth
+    is_sdxl: bool = False,  # is the model SD-XL
 ):
     # Hijacks AttnBlock from ldm and Attention from diffusers
 
@@ -205,11 +307,15 @@ def split_attention(
 
     # Handle hijacking the forward method and recovering afterwards
     try:
+        if is_sdxl:
+            layers = DEPTH_LAYERS_XL
+        else:
+            layers = DEPTH_LAYERS
         for depth in range(max_depth + 1):
             for layer_name, module in layer.named_modules():
-                if any(layer_name.endswith(try_name) for try_name in DEPTH_LAYERS[depth]):
+                if any(layer_name.endswith(try_name) for try_name in layers[depth]):
                     # print input shape for debugging
-                    logging.info(f"HyperTile hijacking attention layer at depth {depth}: {layer_name}")
+                    logging.debug(f"HyperTile hijacking attention layer at depth {depth}: {layer_name}")
                     # hijack
                     module._original_forward_hypertile = module.forward
                     module.forward = self_attn_forward(module.forward, depth, layer_name, module)
