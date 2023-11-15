@@ -243,12 +243,12 @@ def split_attention(
     layer: nn.Module,
     /,
     aspect_ratio: float,  # width/height
-    tile_size: int = 256,  # 128 for VAE
-    swap_size: int = 2,  # 1 for VAE
+    tile_size: int = 128,  # 128 for VAE
+    swap_size: int = 1,  # 1 for VAE
     *,
     disable: bool = False,
     max_depth: Literal[0, 1, 2, 3] = 0,  # ! Try 0 or 1
-    scale_depth: bool = False,  # scale the tile-size depending on the depth
+    scale_depth: bool = True,  # scale the tile-size depending on the depth
     is_sdxl: bool = False,  # is the model SD-XL
 ):
     # Hijacks AttnBlock from ldm and Attention from diffusers
@@ -258,7 +258,7 @@ def split_attention(
         yield
         return
 
-    latent_tile_size = max(32, tile_size) // 8
+    latent_tile_size = max(128, tile_size) // 8
 
     def self_attn_forward(forward: Callable, depth: int, layer_name: str, module: nn.Module) -> Callable:
         @wraps(forward)
