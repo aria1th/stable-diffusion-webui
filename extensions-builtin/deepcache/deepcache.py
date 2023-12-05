@@ -123,8 +123,8 @@ class DeepCacheSession:
                 return unet.id_predictor(h)
             else:
                 return unet.out(h)
-        setattr(unet, 'forward', hijacked_unet_forward)
-        setattr(unet, '_deepcache_hooked', True)
+        unet.forward = hijacked_unet_forward
+        unet._deepcache_hooked = True
         self.unet_reference = unet
 
     def detach(self):

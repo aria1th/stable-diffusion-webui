@@ -48,5 +48,5 @@ def add_axis_options():
     set_b = {opt.label for opt in extra_axis_options}
     if set_a.intersection(set_b):
         return
-    
+
     xyz_grid.axis_options.extend(extra_axis_options)
