@@ -27,6 +27,7 @@ class ScriptDeepCache(scripts.Script):
         )
 
     def process(self, p, *args):
+        self.detach_deepcache()
         if shared.opts.deepcache_enable:
             self.configure_deepcache(self.get_deepcache_params())
 
