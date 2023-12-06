@@ -75,7 +75,6 @@ class DeepCacheSession:
             elif timestep_index < CACHE_LAST['ts'] - full_run_step_rate:
                 CACHE_LAST['ts'] = timestep_index
                 do_full = True
-
             for id, module in enumerate(unet.input_blocks):
                 cache_key = f'in{id}'
                 if cache_key in CACHE_LAST and id > cache_in_block and timestep_index < cache_in_start and timestep_index > cache_disable_step and not do_full:
@@ -90,7 +89,6 @@ class DeepCacheSession:
                     CACHE_LAST[cache_key] = h
                     #print(f"in {id} is {h.mean()}")
                 hs.append(h)
-
             if 'mid' in CACHE_LAST and timestep_index < cache_mid_start and timestep_index > cache_disable_step and not do_full:
                 h = CACHE_LAST['mid']
                 self.cache_success_count += 1
@@ -99,11 +97,10 @@ class DeepCacheSession:
                 h = forward_timestep_embed(unet.middle_block, h, emb, context)
                 CACHE_LAST['mid'] = h
                 #print(f"mid is {h.mean()}")
-
             for id, module in enumerate(unet.output_blocks):
                 hsp = hs.pop()
                 cache_key = f'out{id}'
-                if id < cache_out_block and timestep_index < cache_out_start and timestep_index > cache_disable_step and not do_full:
+                if cache_key in CACHE_LAST and id < cache_out_block and timestep_index < cache_out_start and timestep_index > cache_disable_step and not do_full:
                     h = CACHE_LAST[cache_key]
                     self.cache_success_count += 1
                 else:

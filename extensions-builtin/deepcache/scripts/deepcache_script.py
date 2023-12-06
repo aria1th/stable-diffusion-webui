@@ -68,9 +68,9 @@ def on_ui_settings():
         "deepcache_cache_out_start": shared.OptionInfo(400, "TimeStep - Cache Out Start", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Timestep to start caching in out-blocks"),
         "deepcache_cache_in_block": shared.OptionInfo(6, "Cache In Block Index", gr.Slider, {"minimum": 0, "maximum": 8, "step": 1}).info("In-blocks index"),
         "deepcache_cache_in_block2": shared.OptionInfo(4, "Cache In Block 2 Index", gr.Slider, {"minimum": 0, "maximum": 8, "step": 1}).info("In-blocks index 2"),
-        "deepcache_cache_out_block": shared.OptionInfo(3, "Cache Out Block Index", gr.Slider, {"minimum": 0, "maximum": 8, "step": 1}).info("Out-blocks index"),
+        "deepcache_cache_out_block": shared.OptionInfo(8, "Cache Out Block Index", gr.Slider, {"minimum": 0, "maximum": 8, "step": 1}).info("Out-blocks index"),
         "deepcache_cache_disable_step": shared.OptionInfo(0, "TimeStep - Do not use cache after", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Timestep to stop using cache"),
-        "deepcache_full_run_step_rate": shared.OptionInfo(1000, "TimeStep - Log cache until", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Timestep to start to use cache"),
+        "deepcache_full_run_step_rate": shared.OptionInfo(1000, "TimeStep - Log cache every", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Timestep to start to use cache"),
     }
     for name, opt in options.items():
         opt.section = ('deepcache', "DeepCache")
