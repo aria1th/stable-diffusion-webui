@@ -15,28 +15,25 @@ class ScriptDeepCache(scripts.Script):
 
     def get_deepcache_params(self) -> DeepCacheParams:
         return DeepCacheParams(
-            cache_in_start=shared.opts.deepcache_cache_in_start,
-            cache_in_start2=shared.opts.deepcache_cache_in_start2,
-            cache_mid_start=shared.opts.deepcache_cache_mid_start,
-            cache_out_start=shared.opts.deepcache_cache_out_start,
-            cache_in_block=shared.opts.deepcache_cache_in_block,
-            cache_in_block2=shared.opts.deepcache_cache_in_block2,
-            cache_out_block=shared.opts.deepcache_cache_out_block,
+            cache_in_level=shared.opts.deepcache_cache_resnet_level,
             cache_disable_step=shared.opts.deepcache_cache_disable_step,
             full_run_step_rate=shared.opts.deepcache_full_run_step_rate,
         )
 
-    def process(self, p, *args):
+    def process_batch(self, p, *args, **kwargs):
+        print("DeepCache process")
         self.detach_deepcache()
         if shared.opts.deepcache_enable:
             self.configure_deepcache(self.get_deepcache_params())
 
     def before_hr(self, p, *args):
+        print("DeepCache before_hr")
         self.detach_deepcache()
         if shared.opts.deepcache_enable:
             self.configure_deepcache(self.get_deepcache_params())
 
-    def postprocess(self, p, processed, *args):
+    def postprocess_batch(self, p, *args, **kwargs):
+        print("DeepCache postprocess")
         self.detach_deepcache()
 
     def configure_deepcache(self, params:DeepCacheParams):
@@ -48,6 +45,7 @@ class ScriptDeepCache(scripts.Script):
         )
 
     def detach_deepcache(self):
+        print("Detaching DeepCache")
         if self.session is None:
             return
         self.session.report()
@@ -60,17 +58,10 @@ def on_ui_settings():
         "deepcache_explanation": shared.OptionHTML("""
     <a href='https://github.com/horseee/DeepCache'>DeepCache</a> optimizes by caching the results of mid-blocks, which is known for high level features, and reusing them in the next forward pass.
     """),
-
         "deepcache_enable": shared.OptionInfo(False, "Enable DeepCache").info("noticeable change in details of the generated picture"),
-        "deepcache_cache_in_start": shared.OptionInfo(600, "TimeStep - Cache In Start", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Timestep to start caching in in-blocks"),
-        "deepcache_cache_in_start2": shared.OptionInfo(400, "TimeStep - Cache In Start 2", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Timestep to start caching in in-blocks 2"),
-        "deepcache_cache_mid_start": shared.OptionInfo(800, "TimeStep - Cache Mid Start", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Timestep to start caching in mid-blocks"),
-        "deepcache_cache_out_start": shared.OptionInfo(400, "TimeStep - Cache Out Start", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Timestep to start caching in out-blocks"),
-        "deepcache_cache_in_block": shared.OptionInfo(6, "Cache In Block Index", gr.Slider, {"minimum": 0, "maximum": 8, "step": 1}).info("In-blocks index"),
-        "deepcache_cache_in_block2": shared.OptionInfo(4, "Cache In Block 2 Index", gr.Slider, {"minimum": 0, "maximum": 8, "step": 1}).info("In-blocks index 2"),
-        "deepcache_cache_out_block": shared.OptionInfo(8, "Cache Out Block Index", gr.Slider, {"minimum": 0, "maximum": 8, "step": 1}).info("Out-blocks index"),
-        "deepcache_cache_disable_step": shared.OptionInfo(0, "TimeStep - Do not use cache after", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Timestep to stop using cache"),
-        "deepcache_full_run_step_rate": shared.OptionInfo(1000, "TimeStep - Log cache every", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Timestep to start to use cache"),
+        "deepcache_cache_resnet_level": shared.OptionInfo(0, "Cache Resnet level", gr.Slider, {"minimum": 0, "maximum": 10, "step": 1}).info("Deeper = fewer layers cached"),
+        "deepcache_cache_disable_step": shared.OptionInfo(0, "Deepcaches is disabled before the step", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Step to start using cache"),
+        "deepcache_full_run_step_rate": shared.OptionInfo(5, "Refreshes caches when step is visible by number", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("5 = refresh caches every 5 steps"),
     }
     for name, opt in options.items():
         opt.section = ('deepcache', "DeepCache")
