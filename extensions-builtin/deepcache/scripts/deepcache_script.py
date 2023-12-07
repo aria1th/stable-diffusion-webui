@@ -1,4 +1,4 @@
-from modules import scripts, script_callbacks, shared
+from modules import scripts, script_callbacks, shared, processing
 from deepcache import DeepCacheSession, DeepCacheParams
 from scripts.deepcache_xyz import add_axis_options
 
@@ -13,26 +13,29 @@ class ScriptDeepCache(scripts.Script):
     def show(self, is_img2img):
         return scripts.AlwaysVisible
 
-    def get_deepcache_params(self) -> DeepCacheParams:
+    def get_deepcache_params(self, steps: int) -> DeepCacheParams:
         return DeepCacheParams(
             cache_in_level=shared.opts.deepcache_cache_resnet_level,
-            cache_disable_step=shared.opts.deepcache_cache_disable_step,
+            cache_enable_step=int(shared.opts.deepcache_cache_enable_step_percentage * steps),
             full_run_step_rate=shared.opts.deepcache_full_run_step_rate,
         )
 
-    def process_batch(self, p, *args, **kwargs):
+    def process_batch(self, p:processing.StableDiffusionProcessing, *args, **kwargs):
         print("DeepCache process")
         self.detach_deepcache()
         if shared.opts.deepcache_enable:
-            self.configure_deepcache(self.get_deepcache_params())
+            self.configure_deepcache(self.get_deepcache_params(p.steps))
 
-    def before_hr(self, p, *args):
+    def before_hr(self, p:processing.StableDiffusionProcessing, *args):
         print("DeepCache before_hr")
-        self.detach_deepcache()
+        if self.session is not None:
+            self.session.enumerated_timestep["value"] = -1 # reset enumerated timestep
+        if not shared.opts.deepcache_hr_reuse:
+            self.detach_deepcache()
         if shared.opts.deepcache_enable:
-            self.configure_deepcache(self.get_deepcache_params())
+            self.configure_deepcache(self.get_deepcache_params(getattr(p, 'hr_second_pass_steps', 0) or p.steps)) # use second pass steps if available
 
-    def postprocess_batch(self, p, *args, **kwargs):
+    def postprocess_batch(self, p:processing.StableDiffusionProcessing, *args, **kwargs):
         print("DeepCache postprocess")
         self.detach_deepcache()
 
@@ -60,8 +63,9 @@ def on_ui_settings():
     """),
         "deepcache_enable": shared.OptionInfo(False, "Enable DeepCache").info("noticeable change in details of the generated picture"),
         "deepcache_cache_resnet_level": shared.OptionInfo(0, "Cache Resnet level", gr.Slider, {"minimum": 0, "maximum": 10, "step": 1}).info("Deeper = fewer layers cached"),
-        "deepcache_cache_disable_step": shared.OptionInfo(0, "Deepcaches is disabled after the step", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Step to stop using cache"),
+        "deepcache_cache_enable_step_percentage": shared.OptionInfo(0.4, "Deepcaches is enabled after the step percentage", gr.Slider, {"minimum": 0, "maximum": 1}).info("Percentage of initial steps to disable deepcache"),
         "deepcache_full_run_step_rate": shared.OptionInfo(5, "Refreshes caches when step is visible by number", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("5 = refresh caches every 5 steps"),
+        "deepcache_hr_reuse" : shared.OptionInfo(False, "Reuse for HR").info("Reuses cache information for HR generation"),
     }
     for name, opt in options.items():
         opt.section = ('deepcache', "DeepCache")
