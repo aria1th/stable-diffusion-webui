@@ -60,7 +60,7 @@ def on_ui_settings():
     """),
         "deepcache_enable": shared.OptionInfo(False, "Enable DeepCache").info("noticeable change in details of the generated picture"),
         "deepcache_cache_resnet_level": shared.OptionInfo(0, "Cache Resnet level", gr.Slider, {"minimum": 0, "maximum": 10, "step": 1}).info("Deeper = fewer layers cached"),
-        "deepcache_cache_disable_step": shared.OptionInfo(0, "Deepcaches is disabled before the step", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Step to start using cache"),
+        "deepcache_cache_disable_step": shared.OptionInfo(0, "Deepcaches is disabled after the step", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("Step to stop using cache"),
         "deepcache_full_run_step_rate": shared.OptionInfo(5, "Refreshes caches when step is visible by number", gr.Slider, {"minimum": 0, "maximum": 1000, "step": 1}).info("5 = refresh caches every 5 steps"),
     }
     for name, opt in options.items():

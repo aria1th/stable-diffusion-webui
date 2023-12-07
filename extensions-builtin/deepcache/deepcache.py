@@ -47,12 +47,13 @@ class DeepCacheSession:
             return  # already hooked
         CACHE_LAST = self.CACHE_LAST
         self.stored_forward = unet.forward
-        enumerated_timestep = 0
+        enumerated_timestep = -1
         valid_caching_in_level = min(caching_level, len(unet.input_blocks) - 1)
         valid_caching_out_level = min(valid_caching_in_level, len(unet.output_blocks) - 1)
         # set to max if invalid
         caching_level = valid_caching_out_level
-        def put_cache(h:torch.Tensor, timestep:int):
+        valid_cache_timestep_range = 50 # total 1000, 50
+        def put_cache(h:torch.Tensor, timestep:int, real_timestep:float):
             """
             Registers cache
             """
@@ -64,7 +65,8 @@ class DeepCacheSession:
             CACHE_LAST["timestep"].add(timestep)
             assert h is not None, f"Cannot cache None"
             CACHE_LAST["last"] = h
-        def get_cache(current_timestep:int) -> Optional[torch.Tensor]:
+            CACHE_LAST["real_timestep"] = real_timestep
+        def get_cache(current_timestep:int, real_timestep:float) -> Optional[torch.Tensor]:
             """
             Returns the cached tensor for the given timestep and cache key.
             """
@@ -80,6 +82,10 @@ class DeepCacheSession:
                 self.fail_reasons['full_run_step_rate_division'] += 1
                 self.cache_fail_count += 1
                 return None
+            elif CACHE_LAST.get("real_timestep", 0) + valid_cache_timestep_range < real_timestep:
+                self.fail_reasons['cache_outdated'] += 1
+                self.cache_fail_count += 1
+                return None
             if "last" in CACHE_LAST:
                 self.cache_success_count += 1
                 return CACHE_LAST["last"]
@@ -87,7 +93,7 @@ class DeepCacheSession:
             self.cache_fail_count += 1
             return None
         def hijacked_unet_forward(x, timesteps=None, context=None, y=None, **kwargs):
-            cache_cond = lambda : enumerated_timestep % full_run_step_rate == 0 or enumerated_timestep < cache_disable_step
+            cache_cond = lambda : enumerated_timestep % full_run_step_rate == 0 or enumerated_timestep > cache_disable_step
             use_cache_cond = lambda : enumerated_timestep > cache_disable_step and enumerated_timestep % full_run_step_rate != 0
             nonlocal enumerated_timestep, CACHE_LAST
             assert (y is not None) == (
@@ -100,23 +106,26 @@ class DeepCacheSession:
             if hasattr(unet, 'num_classes') and unet.num_classes is not None:
                 assert y.shape[0] == x.shape[0]
                 emb = emb + unet.label_emb(y)
-
+            real_timestep = timesteps[0].item()
             h = x.type(unet.dtype)
+            cached_h = get_cache(enumerated_timestep, real_timestep)
             for id, module in enumerate(unet.input_blocks):
                 h = forward_timestep_embed(module, h, emb, context)
                 hs.append(h)
-                if use_cache_cond() and id == valid_caching_in_level:
+                if cached_h is not None and use_cache_cond() and id == valid_caching_in_level:
                     break
             if not use_cache_cond():
                 h = forward_timestep_embed(unet.middle_block, h, emb, context)
             relative_cache_level = len(unet.output_blocks) - valid_caching_in_level - 1
             for idx, module in enumerate(unet.output_blocks):
-                cached_h = get_cache(enumerated_timestep)
                 if cached_h is not None and use_cache_cond() and idx == relative_cache_level:
+                    # use cache
                     h = cached_h
                 elif cache_cond() and idx == relative_cache_level:
-                    put_cache(h, enumerated_timestep)
-                elif use_cache_cond() and idx < relative_cache_level:
+                    # put cache
+                    put_cache(h, enumerated_timestep, real_timestep)
+                elif cached_h is not None and use_cache_cond() and idx < relative_cache_level:
+                    # skip, h is already cached
                     continue
                 hsp = hs.pop()
                 h = torch.cat([h, hsp], dim=1)
@@ -147,4 +156,4 @@ class DeepCacheSession:
         self.unet_reference = None
         self.stored_forward = None
         self.CACHE_LAST.clear()
-        self.cache_fail_count = self.cache_success_count = 0
+        self.cache_fail_count = self.cache_success_count = 0#
