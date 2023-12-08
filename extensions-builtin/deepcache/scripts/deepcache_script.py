@@ -24,7 +24,7 @@ class ScriptDeepCache(scripts.Script):
             full_run_step_rate=shared.opts.deepcache_full_run_step_rate,
         )
 
-    def process_batch(self, p:processing.StableDiffusionProcessing, *args, **kwargs):
+    def process_batch_tmp(self, p:processing.StableDiffusionProcessing, *args, **kwargs):
         print("DeepCache process")
         self.detach_deepcache()
         if shared.opts.deepcache_enable:
@@ -37,31 +37,39 @@ class ScriptDeepCache(scripts.Script):
         if not shared.opts.deepcache_hr_reuse:
             self.detach_deepcache()
         if shared.opts.deepcache_enable:
-            self.configure_deepcache(self.get_deepcache_params(getattr(p, 'hr_second_pass_steps', 0) or p.steps), p) # use second pass steps if available
+            if self.session is None:
+                self.configure_deepcache(self.get_deepcache_params(getattr(p, 'hr_second_pass_steps', 0) or p.steps), p) # use second pass steps if available
 
-    def postprocess_batch(self, p:processing.StableDiffusionProcessing, *args, **kwargs):
+    def postprocess_batch_tmp(self, p:processing.StableDiffusionProcessing, *args, **kwargs):
         print("DeepCache postprocess")
+        if UNetHookModified.session is not None:
+            UNetHookModified.session.report()
+            UNetHookModified.session = None
         self.detach_deepcache()
     
     def before_process_batch(self, p, *args, **kwargs):
+        print("DeepCache before_process_batch")
+        if self.session is not None:
+            self.session.enumerated_timestep["value"] = -1 # reset enumerated timestep
+    
+    def before_process(self, p, *args, **kwargs):
+        print("DeepCache before_process")
         self.detach_deepcache()
-        self.configure_deepcache(self.get_deepcache_params(p.steps), p)
+        if shared.opts.deepcache_enable:
+            self.configure_deepcache(self.get_deepcache_params(p.steps), p)
 
     def configure_deepcache(self, params:DeepCacheParams, p:processing.StableDiffusionProcessing):
-        if shared.opts.deepcache_enable:
-            if self.hook_controlnet_func is None:
-                controlnet_hooked = UNetHookModified.patch_controlnet(params=params, p=p)
-                if controlnet_hooked:
-                    print("Controlnet hooked")
-                    hook_cls, hook_func = controlnet_hooked
-                    self.hook_controlnet_func = hook_func
-                    self.hook_cls_ref = hook_cls
-                    return
-            else:
-                print("DeepCache already hooked")
-                return
+        controlnet_hooked = UNetHookModified.patch_controlnet(params=params, p=p)
+        if controlnet_hooked:
+            print("Controlnet hooked")
+            hook_cls, hook_func, session = controlnet_hooked
+            self.hook_controlnet_func = hook_func
+            self.hook_cls_ref = hook_cls
+            self.session = session
+            return
         if self.session is None:
             self.session = DeepCacheSession()
+        print("DeepCache for vanilla unet hooked")
         self.session.deepcache_hook_model(
             shared.sd_model.model.diffusion_model, #unet_model
             params
@@ -70,12 +78,13 @@ class ScriptDeepCache(scripts.Script):
     def detach_deepcache(self):
         print("Detaching DeepCache")
         if self.hook_controlnet_func is not None:
+            print("DeepCache Controlnet unhooked")
             self.hook_cls_ref.hook = self.hook_controlnet_func
             self.hook_controlnet_func = None
             self.hook_cls_ref = None
-            return
         if self.session is None:
             return
+        print("DeepCache unhooked")
         self.session.report()
         self.session.detach()
         self.session = None

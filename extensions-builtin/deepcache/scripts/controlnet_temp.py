@@ -1,18 +1,17 @@
 # everything is copied from https://github.com/Mikubill/sd-webui-controlnet/blob/main/scripts/hook.py
 # this file is for reference only, and is not used in the actual extension
-# revision https://github.com/Mikubill/sd-webui-controlnet/commit/47dfefa54fb128035cc6e84c2fca0b4bc28be62f
+# revision cda3473d102670de45852183ec717c51cea2e8de
 import torch
-import einops
 import hashlib
 import numpy as np
 import torch.nn as nn
 from functools import partial
-import modules.processing
 
 
 from enum import Enum
 from logging import getLogger
-logger = getLogger()
+logger = getLogger(__name__)
+from scripts.controlnet_enums import ControlModelType, AutoMachine
 from modules import devices, lowvram, shared, scripts
 
 cond_cast_unet = getattr(devices, 'cond_cast_unet', lambda x: x)
@@ -94,21 +93,22 @@ def unmark_prompt_context(x):
             logger.warning('Solution (For extension developers): Take a look at ControlNet\' hook.py '
                   'UnetHook.hook.process_sample and manually call mark_prompt_context to mark cond/uncond prompts.')
         mark_batch = torch.ones(size=(x.shape[0], 1, 1, 1), dtype=x.dtype, device=x.device)
-        uc_indices = []
         context = x
-        return mark_batch, uc_indices, context
+        return mark_batch, [], [], context
     mark = x[:, 0, :]
     context = x[:, 1:, :]
     mark = torch.mean(torch.abs(mark - NEGATIVE_MARK_TOKEN), dim=1)
     mark = (mark > MARK_EPS).float()
     mark_batch = mark[:, None, None, None].to(x.dtype).to(x.device)
-    uc_indices = mark.detach().cpu().numpy().tolist()
-    uc_indices = [i for i, item in enumerate(uc_indices) if item < 0.5]
+
+    mark = mark.detach().cpu().numpy().tolist()
+    uc_indices = [i for i, item in enumerate(mark) if item < 0.5]
+    c_indices = [i for i, item in enumerate(mark) if not item < 0.5]
 
     StableDiffusionProcessing.cached_c = [None, None]
     StableDiffusionProcessing.cached_uc = [None, None]
 
-    return mark_batch, uc_indices, context
+    return mark_batch, uc_indices, c_indices, context
 
 
 class HackedImageRNG:
@@ -127,36 +127,6 @@ class HackedImageRNG:
         result = predict_q_sample(self.sd_model, x0, ts, result)
         logger.info(f'[ControlNet] Initial noise hack applied to {result.shape}.')
         return result
-
-
-class ControlModelType(Enum):
-    """
-    The type of Control Models (supported or not).
-    """
-
-    ControlNet = "ControlNet, Lvmin Zhang"
-    T2I_Adapter = "T2I_Adapter, Chong Mou"
-    T2I_StyleAdapter = "T2I_StyleAdapter, Chong Mou"
-    T2I_CoAdapter = "T2I_CoAdapter, Chong Mou"
-    MasaCtrl = "MasaCtrl, Mingdeng Cao"
-    GLIGEN = "GLIGEN, Yuheng Li"
-    AttentionInjection = "AttentionInjection, Lvmin Zhang"  # A simple attention injection written by Lvmin
-    StableSR = "StableSR, Jianyi Wang"
-    PromptDiffusion = "PromptDiffusion, Zhendong Wang"
-    ControlLoRA = "ControlLoRA, Wu Hecong"
-    ReVision = "ReVision, Stability"
-    IPAdapter = "IPAdapter, Hu Ye"
-    Controlllite = "Controlllite, Kohya"
-
-
-# Written by Lvmin
-class AutoMachine(Enum):
-    """
-    Lvmin's algorithm for Attention/AdaIn AutoMachine States.
-    """
-
-    Read = "Read"
-    Write = "Write"
 
 
 class TorchHijackForUnet:
@@ -384,7 +354,9 @@ class UnetHook(nn.Module):
         self.gn_auto_machine = AutoMachine.Read
         self.gn_auto_machine_weight = 1.0
         self.current_style_fidelity = 0.0
-        self.current_uc_indices = None
+        self.current_uc_indices = []
+        self.current_c_indices = []
+        self.is_in_high_res_fix = False
 
     @staticmethod
     def call_vae_using_process(p, x, batch_size=None, mask=None):
@@ -431,7 +403,7 @@ class UnetHook(nn.Module):
             if self.model is not None:
                 self.model.current_sampling_percent = current_sampling_percent
 
-    def hook(self, model, sd_ldm, control_params, process):
+    def hook(self, model, sd_ldm, control_params, process, batch_option_uint_separate=False, batch_option_style_align=False):
         self.model = model
         self.sd_ldm = sd_ldm
         self.control_params = control_params
@@ -466,7 +438,7 @@ class UnetHook(nn.Module):
             batch_size = int(x.shape[0])
 
             # Handle cond-uncond marker
-            cond_mark, outer.current_uc_indices, context = unmark_prompt_context(context)
+            cond_mark, outer.current_uc_indices, outer.current_c_indices, context = unmark_prompt_context(context)
             outer.model.cond_mark = cond_mark
             # logger.info(str(cond_mark[:, 0, 0, 0].detach().cpu().numpy().tolist()) + ' - ' + str(outer.current_uc_indices))
 
@@ -519,6 +491,7 @@ class UnetHook(nn.Module):
                             param.used_hint_inpaint_hijack = None
 
             self.is_in_high_res_fix = is_in_high_res_fix
+            outer.is_in_high_res_fix = is_in_high_res_fix
             no_high_res_control = is_in_high_res_fix and shared.opts.data.get("control_net_no_high_res_fix", False)
 
             # Convert control image to latent
@@ -562,7 +535,7 @@ class UnetHook(nn.Module):
                 context = torch.cat([context, control.clone()], dim=1)
 
             # handle ControlNet / T2I_Adapter
-            for param in outer.control_params:
+            for param_index, param in enumerate(outer.control_params):
                 if no_high_res_control:
                     continue
 
@@ -640,7 +613,16 @@ class UnetHook(nn.Module):
                     if param.control_model_type == ControlModelType.T2I_Adapter:
                         target = total_t2i_adapter_embedding
                     if target is not None:
-                        target[idx] = item + target[idx]
+                        if batch_option_uint_separate:
+                            for pi, ci in enumerate(outer.current_c_indices):
+                                if pi % len(outer.control_params) != param_index:
+                                    item[ci] = 0
+                            for pi, ci in enumerate(outer.current_uc_indices):
+                                if pi % len(outer.control_params) != param_index:
+                                    item[ci] = 0
+                            target[idx] = item + target[idx]
+                        else:
+                            target[idx] = item + target[idx]
 
             # Replace x_t to support inpaint models
             for param in outer.control_params:
@@ -889,6 +871,19 @@ class UnetHook(nn.Module):
                         self_attn1 = style_cfg * self_attn1_c + (1.0 - style_cfg) * self_attn1_uc
                     self.bank = []
                     self.style_cfgs = []
+                if outer.attention_auto_machine == AutoMachine.StyleAlign and not outer.is_in_high_res_fix:
+                    # very VRAM hungry - disable at high_res_fix
+
+                    def shared_attn1(inner_x):
+                        BB, FF, CC = inner_x.shape
+                        return self.attn1(inner_x.reshape(1, BB * FF, CC)).reshape(BB, FF, CC)
+
+                    uc_layer = shared_attn1(x_norm1[outer.current_uc_indices])
+                    c_layer = shared_attn1(x_norm1[outer.current_c_indices])
+                    self_attn1 = torch.zeros_like(x_norm1).to(uc_layer)
+                    self_attn1[outer.current_uc_indices] = uc_layer
+                    self_attn1[outer.current_c_indices] = c_layer
+                    del uc_layer, c_layer
                 if self_attn1 is None:
                     self_attn1 = self.attn1(x_norm1, context=self_attention_context)
 
@@ -945,6 +940,11 @@ class UnetHook(nn.Module):
             if param.control_model_type in [ControlModelType.AttentionInjection]:
                 need_attention_hijack = True
 
+        if batch_option_style_align:
+            need_attention_hijack = True
+            outer.attention_auto_machine = AutoMachine.StyleAlign
+            outer.gn_auto_machine = AutoMachine.StyleAlign
+
         all_modules = torch_dfs(model)
 
         if need_attention_hijack:
@@ -991,7 +991,7 @@ class UnetHook(nn.Module):
             outer.attn_module_list = attn_modules
             outer.gn_module_list = gn_modules
         else:
-            for module in enumerate(all_modules):
+            for module in all_modules:
                 _original_inner_forward_cn_hijack = getattr(module, '_original_inner_forward_cn_hijack', None)
                 original_forward_cn_hijack = getattr(module, 'original_forward_cn_hijack', None)
                 if _original_inner_forward_cn_hijack is not None:
