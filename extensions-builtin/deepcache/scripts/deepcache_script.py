@@ -1,11 +1,15 @@
 from modules import scripts, script_callbacks, shared, processing
 from deepcache import DeepCacheSession, DeepCacheParams
 from scripts.deepcache_xyz import add_axis_options
+from scripts.deepcache_controlnet import UNetHookModified
 
 class ScriptDeepCache(scripts.Script):
-
+    priority = 100
     name = "DeepCache"
     session: DeepCacheSession = None
+    
+    hook_controlnet_func = None
+    hook_cls_ref = None
 
     def title(self):
         return self.name
@@ -24,7 +28,7 @@ class ScriptDeepCache(scripts.Script):
         print("DeepCache process")
         self.detach_deepcache()
         if shared.opts.deepcache_enable:
-            self.configure_deepcache(self.get_deepcache_params(p.steps))
+            self.configure_deepcache(self.get_deepcache_params(p.steps), p)
 
     def before_hr(self, p:processing.StableDiffusionProcessing, *args):
         print("DeepCache before_hr")
@@ -33,13 +37,29 @@ class ScriptDeepCache(scripts.Script):
         if not shared.opts.deepcache_hr_reuse:
             self.detach_deepcache()
         if shared.opts.deepcache_enable:
-            self.configure_deepcache(self.get_deepcache_params(getattr(p, 'hr_second_pass_steps', 0) or p.steps)) # use second pass steps if available
+            self.configure_deepcache(self.get_deepcache_params(getattr(p, 'hr_second_pass_steps', 0) or p.steps), p) # use second pass steps if available
 
     def postprocess_batch(self, p:processing.StableDiffusionProcessing, *args, **kwargs):
         print("DeepCache postprocess")
         self.detach_deepcache()
+    
+    def before_process_batch(self, p, *args, **kwargs):
+        self.detach_deepcache()
+        self.configure_deepcache(self.get_deepcache_params(p.steps), p)
 
-    def configure_deepcache(self, params:DeepCacheParams):
+    def configure_deepcache(self, params:DeepCacheParams, p:processing.StableDiffusionProcessing):
+        if shared.opts.deepcache_enable:
+            if self.hook_controlnet_func is None:
+                controlnet_hooked = UNetHookModified.patch_controlnet(params=params, p=p)
+                if controlnet_hooked:
+                    print("Controlnet hooked")
+                    hook_cls, hook_func = controlnet_hooked
+                    self.hook_controlnet_func = hook_func
+                    self.hook_cls_ref = hook_cls
+                    return
+            else:
+                print("DeepCache already hooked")
+                return
         if self.session is None:
             self.session = DeepCacheSession()
         self.session.deepcache_hook_model(
@@ -49,6 +69,11 @@ class ScriptDeepCache(scripts.Script):
 
     def detach_deepcache(self):
         print("Detaching DeepCache")
+        if self.hook_controlnet_func is not None:
+            self.hook_cls_ref.hook = self.hook_controlnet_func
+            self.hook_controlnet_func = None
+            self.hook_cls_ref = None
+            return
         if self.session is None:
             return
         self.session.report()

@@ -34,6 +34,12 @@ class DeepCacheSession:
     def log_skip(self, reason:str = 'disabled_by_default'):
         self.fail_reasons[reason] += 1
         self.cache_fail_count += 1
+    
+    def load_params(self, params:DeepCacheParams):
+        """
+        Loads the given params into the session.
+        """
+        self.params = params
 
     def report(self):
         # report cache success rate
